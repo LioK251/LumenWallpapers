@@ -1,0 +1,11 @@
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.heic binary
+*.mov binary
+*.mp4 binary
+*.m4v binary
+*.avi binary
+*.dmg binary
+

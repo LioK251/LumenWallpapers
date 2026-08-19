@@ -1,0 +1,31 @@
+# Xcode
+.build/
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+*.xcscmblueprint
+*.xccheckout
+
+# Swift Package Manager
+.swiftpm/
+Packages/
+
+# macOS
+.DS_Store
+
+# Signing and local release configuration
+*.mobileprovision
+*.provisionprofile
+*.p12
+*.cer
+.env
+.env.*
+
+# Generated archives and installers
+*.xcarchive
+*.dmg
+*.zip
+*.pkg
+dist/
+
