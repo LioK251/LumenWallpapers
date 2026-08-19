@@ -6,9 +6,6 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [.executable(name: "LumenWallpapers", targets: ["LumenWallpapers"])],
     targets: [
-        .executableTarget(
-            name: "LumenWallpapers",
-            exclude: ["lumenwallpaper.png"]
-        )
+        .executableTarget(name: "LumenWallpapers")
     ]
 )
