@@ -14,7 +14,7 @@
   <img src="https://img.shields.io/badge/macOS-14%2B-111111?style=flat-square&logo=apple&logoColor=white" alt="macOS 14 or newer">
 </p>
 
-![Lumen Wallpapers window](docs/images/lumen-wallpapers-screenshot.png)
+![Lumen Wallpapers window](docs/images/lumenwallpaper.png)
 
 ## Why Lumen
 
