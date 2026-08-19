@@ -2,6 +2,7 @@
 .build/
 DerivedData/
 build/
+.release/
 *.xcuserstate
 xcuserdata/
 *.xcscmblueprint
@@ -28,4 +29,3 @@ Packages/
 *.zip
 *.pkg
 dist/
-

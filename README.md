@@ -9,13 +9,10 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/OWNER/LumenWallpapers/releases"><img src="https://img.shields.io/github/v/release/OWNER/LumenWallpapers?display_name=tag&style=flat-square" alt="Latest release"></a>
-  <a href="https://github.com/OWNER/LumenWallpapers/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/OWNER/LumenWallpapers/build.yml?style=flat-square&label=build" alt="Build status"></a>
+  <img src="https://img.shields.io/badge/Swift-6.0-F05138?style=flat-square&logo=swift&logoColor=white" alt="Swift 6">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2ea44f?style=flat-square" alt="MIT license"></a>
   <img src="https://img.shields.io/badge/macOS-14%2B-111111?style=flat-square&logo=apple&logoColor=white" alt="macOS 14 or newer">
 </p>
-
-> Replace `OWNER/LumenWallpapers` in the badge links above with the GitHub account and repository name before publishing.
 
 ![Lumen Wallpapers window](docs/images/lumen-wallpapers-screenshot.png)
 
@@ -54,7 +51,6 @@ Requirements:
 The Xcode project is the canonical build entry point:
 
 ```sh
-git clone https://github.com/OWNER/LumenWallpapers.git
 cd LumenWallpapers
 xcodebuild -project LumenWallpapers.xcodeproj \
   -scheme LumenWallpapers \
@@ -104,4 +100,3 @@ Bug reports, feature ideas, and pull requests are welcome. Please read [CONTRIBU
 ## License
 
 Lumen Wallpapers is available under the [MIT License](LICENSE).
-
