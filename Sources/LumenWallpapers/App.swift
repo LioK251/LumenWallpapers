@@ -5,6 +5,8 @@ import AVFoundation
 import ImageIO
 import ServiceManagement
 import UniformTypeIdentifiers
+import IOKit.ps
+import Darwin
 
 @main
 struct LumenWallpapersApp: App {
@@ -21,14 +23,10 @@ struct LumenWallpapersApp: App {
 
         MenuBarExtra("Lumen", systemImage: "sparkles") {
             Button(model.isPlaying ? "Pause Wallpaper" : "Resume Wallpaper") { model.isPlaying.toggle() }
-            Toggle("Video Wallpaper", isOn: Binding(
-                get: { model.lockScreenVideoEnabled },
-                set: { model.setLockScreenVideo($0) }
-            ))
-            Toggle("Launch at Login", isOn: Binding(
-                get: { model.launchAtLoginEnabled },
-                set: { model.setLaunchAtLogin($0) }
-            ))
+            Button("Settings") {
+                model.activeTab = "Settings"
+                NSApp.activate(ignoringOtherApps: true)
+            }
             Divider()
             Button("Open Lumen") { NSApp.activate(ignoringOtherApps: true) }
             Button("Quit") { NSApp.terminate(nil) }
@@ -60,30 +58,88 @@ struct Wallpaper: Identifiable, Hashable, Codable {
 }
 
 @MainActor
-final class WallpaperModel: ObservableObject {
+final class WallpaperModel: NSObject, ObservableObject {
     private static let selectedWallpaperDefaultsKey = "selectedWallpaperPersistenceKey"
+    private static let isPlayingDefaultsKey = "isPlaying"
+    private static let selectedDisplayDefaultsKey = "selectedDisplay"
+    private static let reduceQualityOnBatteryDefaultsKey = "reduceQualityOnBattery"
+    private static let pauseOnFullscreenDefaultsKey = "pauseOnFullscreen"
+    private static let pauseOnHighCPUDefaultsKey = "pauseOnHighCPU"
+    private static let retinaRenderingDefaultsKey = "retinaRendering"
+
     @Published var selected: Wallpaper
-    @Published var isPlaying = true
-    @Published var selectedDisplay = "Built-in Display"
+    @Published var isPlaying: Bool {
+        didSet {
+            UserDefaults.standard.set(isPlaying, forKey: Self.isPlayingDefaultsKey)
+            syncDesktopWallpaper()
+        }
+    }
+    @Published var selectedDisplay: String {
+        didSet {
+            UserDefaults.standard.set(selectedDisplay, forKey: Self.selectedDisplayDefaultsKey)
+            syncDesktopWallpaper()
+        }
+    }
     @Published var activeTab = "Home"
     @Published var searchText = ""
     @Published private(set) var wallpapers: [Wallpaper]
     @Published var importError: String?
     @Published var launchAtLoginEnabled = false
     @Published private(set) var lockScreenVideoEnabled = LockScreenVideoManager.isInstalled
+    @Published var reduceQualityOnBattery: Bool {
+        didSet {
+            UserDefaults.standard.set(reduceQualityOnBattery, forKey: Self.reduceQualityOnBatteryDefaultsKey)
+            syncDesktopWallpaper()
+        }
+    }
+    @Published var pauseOnFullscreen: Bool {
+        didSet {
+            UserDefaults.standard.set(pauseOnFullscreen, forKey: Self.pauseOnFullscreenDefaultsKey)
+            syncDesktopWallpaper()
+        }
+    }
+    @Published var pauseOnHighCPU: Bool {
+        didSet {
+            UserDefaults.standard.set(pauseOnHighCPU, forKey: Self.pauseOnHighCPUDefaultsKey)
+            syncDesktopWallpaper()
+        }
+    }
+    @Published var retinaRendering: Bool {
+        didSet {
+            UserDefaults.standard.set(retinaRendering, forKey: Self.retinaRenderingDefaultsKey)
+            syncDesktopWallpaper()
+        }
+    }
+    @Published private(set) var isOnBattery = false
+    @Published private(set) var isFullscreenAppActive = false
+    @Published private(set) var isHighCPUUsage = false
+    @Published private(set) var cpuUsage = 0.0
+    @Published private(set) var isSystemSleeping = false
+    @Published private(set) var areScreensSleeping = false
+
     private var desktopController: DesktopWallpaperController?
     private let lockScreenVideoManager: LockScreenVideoManager
+    private var systemTimer: Timer?
+    private var workspaceObservers: [NSObjectProtocol] = []
+    private var previousCPUTicks: [UInt32]?
+    private var consecutiveHighCPUSamples = 0
 
     private let libraryURL: URL
     private let builtIns: [Wallpaper] = [
         .builtIn("Cloudline", "Soft sky / 4K", "cloud.sun.fill", ["2563EB", "E5E7EB", "22D3EE"], "Sky")
     ]
 
-    init() {
+    override init() {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         libraryURL = base.appendingPathComponent("LumenWallpapers/Library", isDirectory: true)
         lockScreenVideoManager = LockScreenVideoManager()
         wallpapers = []
+        isPlaying = Self.storedBool(forKey: Self.isPlayingDefaultsKey, defaultValue: true)
+        selectedDisplay = UserDefaults.standard.string(forKey: Self.selectedDisplayDefaultsKey) ?? "Built-in Display"
+        reduceQualityOnBattery = Self.storedBool(forKey: Self.reduceQualityOnBatteryDefaultsKey, defaultValue: true)
+        pauseOnFullscreen = Self.storedBool(forKey: Self.pauseOnFullscreenDefaultsKey, defaultValue: true)
+        pauseOnHighCPU = Self.storedBool(forKey: Self.pauseOnHighCPUDefaultsKey, defaultValue: true)
+        retinaRendering = Self.storedBool(forKey: Self.retinaRenderingDefaultsKey, defaultValue: true)
         try? FileManager.default.createDirectory(at: libraryURL, withIntermediateDirectories: true)
         LegacyWallpaperMigration.cleanupOldSnapshotState(directory: libraryURL)
         let stored = WallpaperModel.loadLibrary(from: libraryURL.appendingPathComponent("library.json"))
@@ -93,6 +149,7 @@ final class WallpaperModel: ObservableObject {
         wallpapers = availableWallpapers
         let savedKey = UserDefaults.standard.string(forKey: Self.selectedWallpaperDefaultsKey)
         selected = availableWallpapers.first { $0.persistenceKey == savedKey } ?? availableWallpapers[0]
+        super.init()
         launchAtLoginEnabled = LaunchAtLoginManager.isEnabled
         if lockScreenVideoManager.hasStoredConfiguration {
             if selected.kind == .video, let url = selected.url {
@@ -102,6 +159,129 @@ final class WallpaperModel: ObservableObject {
             }
             lockScreenVideoEnabled = LockScreenVideoManager.isInstalled
         }
+        startSystemMonitoring()
+    }
+
+    var effectiveIsPlaying: Bool {
+        isPlaying
+            && !isSystemSleeping
+            && !areScreensSleeping
+            && !(pauseOnFullscreen && isFullscreenAppActive)
+            && !(pauseOnHighCPU && isHighCPUUsage)
+    }
+
+    var isReducedQualityActive: Bool {
+        reduceQualityOnBattery && isOnBattery
+    }
+
+    var pauseReason: String? {
+        if !isPlaying { return "Paused manually" }
+        if isSystemSleeping || areScreensSleeping { return "Paused while the Mac is sleeping" }
+        if pauseOnFullscreen && isFullscreenAppActive { return "Paused for a full-screen app" }
+        if pauseOnHighCPU && isHighCPUUsage { return "Paused because CPU usage is high" }
+        return nil
+    }
+
+    private static func storedBool(forKey key: String, defaultValue: Bool) -> Bool {
+        UserDefaults.standard.object(forKey: key) as? Bool ?? defaultValue
+    }
+
+    private func startSystemMonitoring() {
+        let notificationCenter = NSWorkspace.shared.notificationCenter
+        let pauseNotifications: [(Notification.Name, Bool)] = [
+            (NSWorkspace.willSleepNotification, true),
+            (NSWorkspace.screensDidSleepNotification, true),
+            (NSWorkspace.didWakeNotification, false),
+            (NSWorkspace.screensDidWakeNotification, false)
+        ]
+        for (name, sleeping) in pauseNotifications {
+            let observer = notificationCenter.addObserver(
+                forName: name,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    if sleeping {
+                        if name == NSWorkspace.screensDidSleepNotification {
+                            self.areScreensSleeping = true
+                        } else {
+                            self.isSystemSleeping = true
+                        }
+                    } else {
+                        if name == NSWorkspace.screensDidWakeNotification {
+                            self.areScreensSleeping = false
+                        } else {
+                            self.isSystemSleeping = false
+                        }
+                    }
+                    self.syncDesktopWallpaper()
+                }
+            }
+            workspaceObservers.append(observer)
+        }
+
+        let timer = Timer(timeInterval: 1.5, target: self, selector: #selector(systemTimerFired), userInfo: nil, repeats: true)
+        RunLoop.main.add(timer, forMode: .common)
+        systemTimer = timer
+        updateSystemConditions()
+    }
+
+    @objc private func systemTimerFired() {
+        updateSystemConditions()
+    }
+
+    private func updateSystemConditions() {
+        let wasPlaying = effectiveIsPlaying
+        let wasReducedQuality = isReducedQualityActive
+        let battery = PowerSourceMonitor.isOnBatteryPower
+        let fullscreen = FullscreenApplicationDetector.isAnotherAppFullscreen()
+        let sample = sampleCPUUsage()
+        isOnBattery = battery
+        isFullscreenAppActive = fullscreen
+        if let sample {
+            cpuUsage = sample
+            if sample >= 80 {
+                consecutiveHighCPUSamples += 1
+            } else {
+                consecutiveHighCPUSamples = 0
+            }
+            // Require two consecutive samples so a short burst does not pause playback.
+            isHighCPUUsage = consecutiveHighCPUSamples >= 2
+        } else {
+            isHighCPUUsage = false
+        }
+        if effectiveIsPlaying != wasPlaying || isReducedQualityActive != wasReducedQuality {
+            syncDesktopWallpaper()
+        }
+    }
+
+    private func sampleCPUUsage() -> Double? {
+        var cpuInfo = host_cpu_load_info_data_t()
+        var count = mach_msg_type_number_t(
+            MemoryLayout<host_cpu_load_info_data_t>.stride / MemoryLayout<integer_t>.stride
+        )
+        let result = withUnsafeMutablePointer(to: &cpuInfo) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                host_statistics(mach_host_self(), HOST_CPU_LOAD_INFO, $0, &count)
+            }
+        }
+        guard result == KERN_SUCCESS else { return nil }
+        let ticks = withUnsafeBytes(of: cpuInfo.cpu_ticks) {
+            Array($0.bindMemory(to: UInt32.self))
+        }
+        guard let previousCPUTicks else {
+            self.previousCPUTicks = ticks
+            return nil
+        }
+        self.previousCPUTicks = ticks
+        let deltas = zip(ticks, previousCPUTicks).map { current, previous in
+            current >= previous ? UInt64(current - previous) : UInt64(current)
+        }
+        let total = deltas.reduce(0, +)
+        guard total > 0, deltas.count > Int(CPU_STATE_IDLE) else { return nil }
+        let idle = deltas[Int(CPU_STATE_IDLE)]
+        return Double(total - idle) / Double(total) * 100
     }
 
     var filteredWallpapers: [Wallpaper] {
@@ -116,7 +296,16 @@ final class WallpaperModel: ObservableObject {
         syncDesktopWallpaper()
     }
 
-    func syncDesktopWallpaper() { desktopController?.apply(wallpaper: selected, isPlaying: isPlaying, display: selectedDisplay) }
+    func syncDesktopWallpaper() {
+        desktopController?.apply(
+            wallpaper: selected,
+            isPlaying: effectiveIsPlaying,
+            display: selectedDisplay,
+            reducedQuality: isReducedQualityActive,
+            retinaRendering: retinaRendering,
+            isSuspended: isSystemSleeping || areScreensSleeping
+        )
+    }
 
     func select(_ wallpaper: Wallpaper) {
         guard wallpapers.contains(where: { $0.id == wallpaper.id }) else { return }
@@ -249,7 +438,12 @@ struct DashboardView: View {
 
     var body: some View {
         ZStack {
-            FullscreenWallpaperBackground(wallpaper: model.selected, isPlaying: model.isPlaying)
+            FullscreenWallpaperBackground(
+                wallpaper: model.selected,
+                isPlaying: model.effectiveIsPlaying,
+                reducedQuality: model.isReducedQualityActive,
+                retinaRendering: model.retinaRendering
+            )
             LinearGradient(colors: [.black.opacity(0.08), .clear, .black.opacity(0.84)], startPoint: .top, endPoint: .bottom).ignoresSafeArea()
             VStack(spacing: 0) {
                 TopGlassBar(model: model, showImportHelp: $showImportHelp)
@@ -260,6 +454,8 @@ struct DashboardView: View {
                             WallpaperRow(title: "Recommended for you", wallpapers: Array(model.filteredWallpapers.prefix(6)), model: model, onRename: { renameTarget = $0 }, onRemove: { removeTarget = $0 })
                             WallpaperRow(title: "My media", wallpapers: model.wallpapers.filter { $0.kind != .procedural }, model: model, emptyText: "Import a video or image to start your library", onRename: { renameTarget = $0 }, onRemove: { removeTarget = $0 })
                             PerformanceBar(model: model)
+                        } else if model.activeTab == "Settings" {
+                            SettingsView(model: model)
                         } else {
                             LibraryGrid(model: model, wallpapers: model.filteredWallpapers, title: model.activeTab == "Explore" ? "Explore all wallpapers" : "My Library", emptyText: model.activeTab == "Explore" ? "No wallpapers match your search" : "Import a video or image to start your library", onRename: { renameTarget = $0 }, onRemove: { removeTarget = $0 })
                         }
@@ -288,21 +484,23 @@ struct DashboardView: View {
             }
         }
         .onAppear { model.startDesktopWallpaper() }
-        .onChange(of: model.isPlaying) { _, _ in model.syncDesktopWallpaper() }
-        .onChange(of: model.selectedDisplay) { _, _ in model.syncDesktopWallpaper() }
         .animation(.easeInOut(duration: 0.36), value: model.selected.id)
         .animation(.easeInOut(duration: 0.24), value: model.activeTab)
     }
 }
 
 struct FullscreenWallpaperBackground: View {
-    let wallpaper: Wallpaper; let isPlaying: Bool
+    @Environment(\.displayScale) private var nativeDisplayScale
+    let wallpaper: Wallpaper
+    let isPlaying: Bool
+    let reducedQuality: Bool
+    let retinaRendering: Bool
     var body: some View {
         Group {
             if wallpaper.kind == .procedural {
-                LiveWallpaperCanvas(wallpaper: wallpaper, isPlaying: isPlaying)
+                LiveWallpaperCanvas(wallpaper: wallpaper, isPlaying: isPlaying, reducedQuality: reducedQuality)
             } else if wallpaper.kind == .video, let url = wallpaper.url {
-                VideoSurface(url: url, isPlaying: isPlaying)
+                VideoSurface(url: url, isPlaying: isPlaying, reducedQuality: reducedQuality)
             } else if let url = wallpaper.url {
                 Image(nsImage: NSImage(contentsOf: url) ?? NSImage()).resizable().scaledToFill()
             } else {
@@ -313,6 +511,7 @@ struct FullscreenWallpaperBackground: View {
         .transition(.opacity)
         .ignoresSafeArea()
         .scaleEffect(1.01)
+        .environment(\.displayScale, retinaRendering && !reducedQuality ? nativeDisplayScale : 1)
         .animation(.easeInOut(duration: 0.55), value: wallpaper.id)
     }
 }
@@ -324,7 +523,7 @@ struct TopGlassBar: View {
             Spacer()
 
             HStack(spacing: 3) {
-                ForEach(["Home", "Explore", "My Library"], id: \.self) { tab in
+                ForEach(["Home", "Explore", "My Library", "Settings"], id: \.self) { tab in
                     Button(tab) {
                         withAnimation(.easeInOut(duration: 0.28)) {
                             model.activeTab = tab
@@ -507,7 +706,7 @@ struct WallpaperCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ZStack(alignment: .topTrailing) {
-                WallpaperMediaView(wallpaper: wallpaper, isPlaying: false)
+                WallpaperMediaView(wallpaper: wallpaper, isPlaying: false, reducedQuality: true)
                     .frame(width: 220, height: 132)
                     .clipShape(RoundedRectangle(cornerRadius: 16))
                     .contentShape(RoundedRectangle(cornerRadius: 16))
@@ -582,13 +781,14 @@ struct CardActionButtonStyle: ButtonStyle {
 struct WallpaperMediaView: View {
     let wallpaper: Wallpaper
     let isPlaying: Bool
+    let reducedQuality: Bool
 
     var body: some View {
         Group {
             if wallpaper.kind == .procedural {
-                LiveWallpaperCanvas(wallpaper: wallpaper, isPlaying: isPlaying)
+                LiveWallpaperCanvas(wallpaper: wallpaper, isPlaying: isPlaying, reducedQuality: reducedQuality)
             } else if wallpaper.kind == .video, let url = wallpaper.url {
-                VideoSurface(url: url, isPlaying: isPlaying)
+                VideoSurface(url: url, isPlaying: isPlaying, reducedQuality: reducedQuality)
             } else if let url = wallpaper.url {
                 Image(nsImage: NSImage(contentsOf: url) ?? NSImage())
                     .resizable()
@@ -600,43 +800,94 @@ struct WallpaperMediaView: View {
     }
 }
 
-struct LiveWallpaperCanvas: View { let wallpaper: Wallpaper; let isPlaying: Bool; var body: some View { TimelineView(.animation(minimumInterval: isPlaying ? (1.0 / 30.0) : 3600, paused: !isPlaying)) { context in Canvas { graphics, size in let rect = CGRect(origin: .zero, size: size); graphics.fill(Path(rect), with: .linearGradient(Gradient(colors: wallpaper.swiftColors.map { $0.opacity(0.9) }), startPoint: CGPoint(x: 0, y: size.height), endPoint: CGPoint(x: size.width, y: 0))); let t = context.date.timeIntervalSinceReferenceDate; for index in 0..<8 { let x = size.width * (0.12 + CGFloat(index % 3) * 0.39) + sin(t * 0.2 + Double(index)) * 90; let y = size.height * (0.18 + CGFloat(index / 3) * 0.32) + cos(t * 0.16 + Double(index)) * 52; let radius = 80 + CGFloat(index * 9); graphics.fill(Path(ellipseIn: CGRect(x: x - radius, y: y - radius, width: radius * 2, height: radius * 2)), with: .radialGradient(Gradient(colors: [wallpaper.swiftColors[index % wallpaper.swiftColors.count].opacity(0.56), .clear]), center: CGPoint(x: x, y: y), startRadius: 0, endRadius: radius)) }; graphics.fill(Path(rect), with: .color(.black.opacity(0.12))) } } } }
+struct LiveWallpaperCanvas: View {
+    let wallpaper: Wallpaper
+    let isPlaying: Bool
+    let reducedQuality: Bool
+
+    private var frameInterval: Double {
+        reducedQuality ? 1.0 / 15.0 : 1.0 / 30.0
+    }
+
+    private var blobCount: Int {
+        reducedQuality ? 4 : 8
+    }
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: isPlaying ? frameInterval : 3600, paused: !isPlaying)) { context in
+            Canvas { graphics, size in
+                let rect = CGRect(origin: .zero, size: size)
+                graphics.fill(
+                    Path(rect),
+                    with: .linearGradient(
+                        Gradient(colors: wallpaper.swiftColors.map { $0.opacity(0.9) }),
+                        startPoint: CGPoint(x: 0, y: size.height),
+                        endPoint: CGPoint(x: size.width, y: 0)
+                    )
+                )
+                let t = context.date.timeIntervalSinceReferenceDate
+                for index in 0..<blobCount {
+                    let x = size.width * (0.12 + CGFloat(index % 3) * 0.39) + sin(t * 0.2 + Double(index)) * (reducedQuality ? 48 : 90)
+                    let y = size.height * (0.18 + CGFloat(index / 3) * 0.32) + cos(t * 0.16 + Double(index)) * (reducedQuality ? 28 : 52)
+                    let radius = (reducedQuality ? 64 : 80) + CGFloat(index * (reducedQuality ? 6 : 9))
+                    graphics.fill(
+                        Path(ellipseIn: CGRect(x: x - radius, y: y - radius, width: radius * 2, height: radius * 2)),
+                        with: .radialGradient(
+                            Gradient(colors: [wallpaper.swiftColors[index % wallpaper.swiftColors.count].opacity(0.56), .clear]),
+                            center: CGPoint(x: x, y: y),
+                            startRadius: 0,
+                            endRadius: radius
+                        )
+                    )
+                }
+                graphics.fill(Path(rect), with: .color(.black.opacity(0.12)))
+            }
+        }
+    }
+}
 
 struct VideoSurface: NSViewRepresentable {
+    @Environment(\.displayScale) private var displayScale
     let url: URL
     let isPlaying: Bool
+    let reducedQuality: Bool
 
-    func makeCoordinator() -> Coordinator { Coordinator(url: url) }
+    func makeCoordinator() -> Coordinator { Coordinator(url: url, reducedQuality: reducedQuality) }
 
     func makeNSView(context: Context) -> PlayerContainerView {
         let view = PlayerContainerView()
         view.playerLayer.player = context.coordinator.player
+        view.playerLayer.contentsScale = displayScale
         context.coordinator.setPlaying(isPlaying)
         return view
     }
 
     func updateNSView(_ view: PlayerContainerView, context: Context) {
-        context.coordinator.update(url: url, isPlaying: isPlaying)
+        view.playerLayer.contentsScale = displayScale
+        context.coordinator.update(url: url, isPlaying: isPlaying, reducedQuality: reducedQuality)
     }
 
     final class Coordinator {
         let player = AVQueuePlayer()
         private var looper: AVPlayerLooper?
         private var currentURL: URL
+        private var reducedQuality: Bool
 
-        init(url: URL) {
+        init(url: URL, reducedQuality: Bool) {
             currentURL = url
+            self.reducedQuality = reducedQuality
             player.isMuted = true
             player.actionAtItemEnd = .none
             player.automaticallyWaitsToMinimizeStalling = false
             looper = makeLooper(for: url)
         }
 
-        func update(url: URL, isPlaying: Bool) {
-            if url != currentURL {
+        func update(url: URL, isPlaying: Bool, reducedQuality: Bool) {
+            if url != currentURL || reducedQuality != self.reducedQuality {
                 looper = nil
                 player.removeAllItems()
                 currentURL = url
+                self.reducedQuality = reducedQuality
                 looper = makeLooper(for: url)
             }
             setPlaying(isPlaying)
@@ -645,7 +896,12 @@ struct VideoSurface: NSViewRepresentable {
         func setPlaying(_ playing: Bool) { playing ? player.play() : player.pause() }
 
         private func makeLooper(for url: URL) -> AVPlayerLooper {
-            AVPlayerLooper(player: player, templateItem: AVPlayerItem(url: url))
+            let item = AVPlayerItem(url: url)
+            if reducedQuality {
+                item.preferredPeakBitRate = 2_000_000
+                item.preferredMaximumResolution = CGSize(width: 1280, height: 720)
+            }
+            return AVPlayerLooper(player: player, templateItem: item)
         }
     }
 }
@@ -664,28 +920,163 @@ struct PerformanceBar: View {
             Image(systemName: "leaf.fill").foregroundStyle(.green)
             VStack(alignment: .leading, spacing: 3) {
                 Text("Optimized for your Mac").font(.system(size: 14, weight: .semibold))
-                Text("Lumen keeps the desktop wallpaper running when its window is hidden and limits procedural scenes to 30 FPS.").font(.system(size: 12)).foregroundStyle(.white.opacity(0.56))
+                Text(model.pauseReason ?? (model.isReducedQualityActive ? "Battery mode is reducing wallpaper quality." : "Wallpaper playback is running normally."))
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.56))
             }
             Spacer()
-            VStack(alignment: .trailing, spacing: 8) {
-                Toggle("Motion", isOn: $model.isPlaying)
-                    .toggleStyle(.switch)
-                Toggle("Video Wallpaper", isOn: Binding(
-                    get: { model.lockScreenVideoEnabled },
-                    set: { model.setLockScreenVideo($0) }
-                ))
-                .toggleStyle(.switch)
-                .help("Install the selected video in System Settings > Wallpaper for Desktop and Lock Screen")
-                Toggle("Launch at Login", isOn: Binding(
-                    get: { model.launchAtLoginEnabled },
-                    set: { model.setLaunchAtLogin($0) }
-                ))
-                .toggleStyle(.switch)
+            Button {
+                model.activeTab = "Settings"
+            } label: {
+                Label("Settings", systemImage: "gearshape")
             }
+            .buttonStyle(LiquidButtonStyle())
         }
         .padding(16)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 17))
         .overlay(RoundedRectangle(cornerRadius: 17).stroke(.white.opacity(0.12)))
+    }
+}
+
+struct SettingsView: View {
+    @ObservedObject var model: WallpaperModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 26) {
+            VStack(alignment: .leading, spacing: 7) {
+                Text("Settings")
+                    .font(.system(size: 34, weight: .semibold, design: .rounded))
+                Text("Control playback, power usage, and display quality.")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.white.opacity(0.62))
+            }
+
+            SettingsSection(title: "Playback") {
+                SettingsToggleRow(
+                    title: "Motion",
+                    description: "Allow animated wallpapers to play.",
+                    symbol: "play.fill",
+                    isOn: $model.isPlaying
+                )
+                SettingsToggleRow(
+                    title: "Pause when an app is full-screen",
+                    description: "Pause while another app uses a full-screen window.",
+                    symbol: "arrow.up.left.and.arrow.down.right",
+                    isOn: $model.pauseOnFullscreen
+                )
+                SettingsToggleRow(
+                    title: "Pause on high CPU usage",
+                    description: "Pause after sustained system CPU usage above 80%.",
+                    symbol: "gauge.with.dots.needle.67percent",
+                    isOn: $model.pauseOnHighCPU
+                )
+            }
+
+            SettingsSection(title: "Power & Display") {
+                SettingsToggleRow(
+                    title: "Reduce quality on battery",
+                    description: "Use lower frame rate and video quality when running on battery.",
+                    symbol: "battery.50percent",
+                    isOn: $model.reduceQualityOnBattery
+                )
+                SettingsToggleRow(
+                    title: "Retina rendering",
+                    description: "Render wallpaper windows at the display's native scale.",
+                    symbol: "sparkles.tv",
+                    isOn: $model.retinaRendering
+                )
+            }
+
+            SettingsSection(title: "System") {
+                SettingsToggleRow(
+                    title: "Video Wallpaper",
+                    description: "Install the selected video in macOS Wallpaper for Desktop and Lock Screen.",
+                    symbol: "rectangle.on.rectangle",
+                    isOn: Binding(
+                        get: { model.lockScreenVideoEnabled },
+                        set: { model.setLockScreenVideo($0) }
+                    )
+                )
+                SettingsToggleRow(
+                    title: "Launch at Login",
+                    description: "Start Lumen automatically when you sign in.",
+                    symbol: "power",
+                    isOn: Binding(
+                        get: { model.launchAtLoginEnabled },
+                        set: { model.setLaunchAtLogin($0) }
+                    )
+                )
+            }
+
+            HStack(spacing: 8) {
+                Image(systemName: "info.circle")
+                Text(model.isOnBattery ? "On battery" : "Connected to power")
+                Text("•")
+                Text("CPU \(Int(model.cpuUsage.rounded()))%")
+                if model.isFullscreenAppActive {
+                    Text("• Full-screen app detected")
+                }
+            }
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(.white.opacity(0.58))
+        }
+        .frame(maxWidth: 760, alignment: .leading)
+        .padding(.top, 34)
+        .padding(.bottom, 20)
+    }
+}
+
+private struct SettingsSection<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(title.uppercased())
+                .font(.system(size: 11, weight: .bold))
+                .tracking(1.2)
+                .foregroundStyle(.white.opacity(0.5))
+                .padding(.bottom, 8)
+            VStack(spacing: 0) {
+                content()
+            }
+            .padding(.horizontal, 18)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.12)))
+        }
+    }
+}
+
+private struct SettingsToggleRow: View {
+    let title: String
+    let description: String
+    let symbol: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: symbol)
+                .font(.system(size: 16, weight: .semibold))
+                .frame(width: 24)
+                .foregroundStyle(.cyan)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 14, weight: .semibold))
+                Text(description)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.55))
+            }
+            Spacer(minLength: 14)
+            Toggle("", isOn: $isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
+        }
+        .padding(.vertical, 14)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(.white.opacity(0.08))
+                .frame(height: 1)
+        }
     }
 }
 
@@ -795,6 +1186,47 @@ enum LaunchAtLoginManager {
     }
 }
 
+enum PowerSourceMonitor {
+    static var isOnBatteryPower: Bool {
+        guard let snapshot = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
+              let source = IOPSGetProvidingPowerSourceType(snapshot)?.takeUnretainedValue() else {
+            return false
+        }
+        return source as String == kIOPSBatteryPowerValue
+    }
+}
+
+enum FullscreenApplicationDetector {
+    static func isAnotherAppFullscreen() -> Bool {
+        guard let frontmostApplication = NSWorkspace.shared.frontmostApplication,
+              frontmostApplication.processIdentifier != ProcessInfo.processInfo.processIdentifier,
+              let windows = CGWindowListCopyWindowInfo(
+                [.optionOnScreenOnly, .excludeDesktopElements],
+                kCGNullWindowID
+              ) as? [[String: Any]] else {
+            return false
+        }
+
+        return windows.contains { window in
+            guard let ownerPID = window[kCGWindowOwnerPID as String] as? pid_t,
+                  ownerPID == frontmostApplication.processIdentifier,
+                  let layer = window[kCGWindowLayer as String] as? Int,
+                  layer == 0,
+                  let boundsDictionary = window[kCGWindowBounds as String] as? NSDictionary else {
+                return false
+            }
+            var bounds = CGRect.zero
+            guard CGRectMakeWithDictionaryRepresentation(boundsDictionary as CFDictionary, &bounds) else {
+                return false
+            }
+            return NSScreen.screens.contains { screen in
+                bounds.width >= screen.frame.width * 0.98
+                    && bounds.height >= screen.frame.height * 0.98
+            }
+        }
+    }
+}
+
 extension Color { init(hex: String) { let value = UInt64(hex, radix: 16) ?? 0; self.init(red: Double((value >> 16) & 0xff) / 255, green: Double((value >> 8) & 0xff) / 255, blue: Double(value & 0xff) / 255) } }
 
 private extension NSColor {
@@ -819,7 +1251,50 @@ private extension NSScreen {
 @MainActor
 final class DesktopWallpaperController {
     private var windows: [NSWindow] = []
-    func apply(wallpaper: Wallpaper, isPlaying: Bool, display: String) { windows.forEach { $0.orderOut(nil) }; windows.removeAll(); let screens = NSScreen.screens.filter { display == "All Displays" || (display == "Built-in Display" ? $0 == NSScreen.main : $0 != NSScreen.main) }; for screen in screens { let window = NSWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false); window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopWindow))); window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]; window.isOpaque = false; window.backgroundColor = .clear; window.hasShadow = false; window.ignoresMouseEvents = true; window.contentView = NSHostingView(rootView: WallpaperMediaView(wallpaper: wallpaper, isPlaying: isPlaying)); window.orderFrontRegardless(); windows.append(window) } }
+    func apply(
+        wallpaper: Wallpaper,
+        isPlaying: Bool,
+        display: String,
+        reducedQuality: Bool,
+        retinaRendering: Bool,
+        isSuspended: Bool
+    ) {
+        windows.forEach { $0.orderOut(nil) }
+        windows.removeAll()
+        guard !isSuspended else { return }
+
+        let screens = NSScreen.screens.filter {
+            display == "All Displays"
+                || (display == "Built-in Display" ? $0 == NSScreen.main : $0 != NSScreen.main)
+        }
+        for screen in screens {
+            let window = NSWindow(
+                contentRect: screen.frame,
+                styleMask: .borderless,
+                backing: .buffered,
+                defer: false
+            )
+            window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopWindow)))
+            window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+            window.isOpaque = false
+            window.backgroundColor = .clear
+            window.hasShadow = false
+            window.ignoresMouseEvents = true
+            let hostView = NSHostingView(
+                rootView: WallpaperMediaView(
+                    wallpaper: wallpaper,
+                    isPlaying: isPlaying,
+                    reducedQuality: reducedQuality
+                )
+                .environment(\.displayScale, retinaRendering ? screen.backingScaleFactor : 1)
+            )
+            hostView.wantsLayer = true
+            hostView.layer?.contentsScale = retinaRendering ? screen.backingScaleFactor : 1
+            window.contentView = hostView
+            window.orderFrontRegardless()
+            windows.append(window)
+        }
+    }
 }
 
 @MainActor

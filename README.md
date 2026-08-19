@@ -26,7 +26,9 @@ Lumen keeps your desktop calm and alive without subscriptions, accounts, or a cl
 - **Local media library** for `.mov`, `.mp4`, `.m4v`, `.avi`, `.jpg`, `.jpeg`, `.png`, and `.heic`.
 - **Smooth looping video** with muted playback and a 30 FPS procedural budget.
 - **Display targeting** for the built-in display, external displays, or all displays.
-- **Menu bar controls** for quick pause/resume, launch-at-login, and app access.
+- **Dedicated settings** for playback, battery quality, CPU/full-screen pausing, and Retina rendering.
+- **Sleep-aware playback** that releases wallpaper renderers while macOS or its displays are asleep.
+- **Menu bar controls** for quick pause/resume, Settings, and app access.
 - **Video Wallpaper** registered in macOS **System Settings > Wallpaper**, for both the desktop and idle/lock screen.
 - **Offline-first by design**: imported media stays in `~/Library/Application Support/LumenWallpapers/Library`.
 
@@ -73,7 +75,9 @@ Click `+` in the top bar or **Import media** in the preview. Lumen copies select
 
 For smooth loops, use a 16:9 or 16:10 clip at 1080p or 4K, around 10–30 seconds long, with matching first and last frames. Wallpaper audio is muted by design.
 
-Select an imported video and turn on **Video Wallpaper** in the performance panel or menu bar. Lumen adds a copy of the video and a generated preview to macOS's Aerials catalog, where it appears under the **Lumen Wallpapers** category in **System Settings > Wallpaper**. It selects the same asset for Desktop and Idle, which is the wallpaper macOS uses behind the lock-screen interface. Turn the option off to remove Lumen's catalog entry and restore the previous wallpaper selection.
+Select an imported video and turn on **Video Wallpaper** in the **Settings** tab. Lumen adds a copy of the video and a generated preview to macOS's Aerials catalog, where it appears under the **Lumen Wallpapers** category in **System Settings > Wallpaper**. It selects the same asset for Desktop and Idle, which is the wallpaper macOS uses behind the lock-screen interface. Turn the option off to remove Lumen's catalog entry and restore the previous wallpaper selection.
+
+The Settings tab also includes battery-aware quality reduction, automatic pause for full-screen apps or sustained CPU load, Retina rendering, and launch-at-login. These preferences are stored locally. When the Mac or its displays sleep, Lumen removes its wallpaper windows and releases video playback, then restores the wallpaper after wake.
 
 Only import media you created yourself or have permission to use. Good sources for openly licensed material include [Pexels](https://www.pexels.com/), [Pixabay](https://pixabay.com/), [Mixkit](https://mixkit.co/), [NASA media](https://images.nasa.gov/), and [Wikimedia Commons](https://commons.wikimedia.org/).
 
@@ -84,7 +88,7 @@ The repository includes [`scripts/build-release.sh`](scripts/build-release.sh), 
 ```sh
 export DEVELOPER_ID_APPLICATION="Developer ID Application: Your Name (TEAMID)"
 export KEYCHAIN_PROFILE="lumen-notary"
-./scripts/build-release.sh 1.0.1
+./scripts/build-release.sh 1.0.2
 ```
 
 Create the `notarytool` keychain profile once with `xcrun notarytool store-credentials`. The script signs with hardened runtime, submits the DMG for notarization, and staples the ticket. A notarized, Developer ID-signed DMG is what gives users the normal “open” experience without an unidentified-developer warning.
