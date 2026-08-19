@@ -41,6 +41,8 @@ Lumen keeps your desktop calm and alive without subscriptions, accounts, or a cl
 
 Release DMGs built with the included script are universal (`arm64` + `x86_64`). Unsigned builds may show a Gatekeeper warning; see [Release signing](#release-signing) for a trusted distribution build.
 
+For a trusted local or ad-hoc build, Control-click **Lumen Wallpapers.app**, choose **Open**, and confirm. If macOS still blocks it after the first launch attempt, open **System Settings > Privacy & Security > Open Anyway**. Only bypass Gatekeeper for artifacts you built yourself or obtained from a source you trust.
+
 ### Build from source
 
 Requirements:
