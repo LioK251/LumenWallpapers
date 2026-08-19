@@ -1,7 +1,7 @@
 # Lumen Wallpapers
 
 <p align="center">
-  <img src="Assets.xcassets/AppIcon.appiconset/icon-256.png" width="128" alt="Lumen Wallpapers icon">
+  <img src="Assets.xcassets/AppIcon.appiconset/icon-128.png" width="128" alt="Lumen Wallpapers icon">
 </p>
 
 <p align="center">
