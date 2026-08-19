@@ -6,7 +6,6 @@ Lumen Wallpapers is designed to work locally.
 - The app does not make network requests.
 - Imported files are copied to `~/Library/Application Support/LumenWallpapers/Library` and remain on the Mac.
 - The app stores selected wallpaper, display, and feature preferences in standard macOS app preferences.
-- Enabling Lock Screen Snapshot temporarily writes a generated PNG to the same local library and restores the previous desktop images when disabled.
+- Video Wallpaper copies the selected local video and a generated preview into the user's macOS wallpaper catalog under `~/Library/Application Support/com.apple.wallpaper/aerials`. No video data leaves the Mac.
 
 The app may access files you explicitly choose in the import panel and uses macOS APIs to draw wallpaper windows behind your desktop icons.
-

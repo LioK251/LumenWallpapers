@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${1:-1.0.0}"
+VERSION="${1:-1.0.1}"
 if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
-  echo "Version must look like 1.0.0 or 1.0.0-beta.1" >&2
+  echo "Version must look like 1.0.1 or 1.0.1-beta.1" >&2
   exit 1
 fi
 
@@ -34,11 +34,11 @@ xcodebuild \
 
 if [[ -n "${DEVELOPER_ID_APPLICATION:-}" ]]; then
   echo "Signing with ${DEVELOPER_ID_APPLICATION}..."
-  codesign --deep --force --options runtime --timestamp \
+  codesign --force --options runtime --timestamp \
     --sign "$DEVELOPER_ID_APPLICATION" "$APP_PATH"
 else
   echo "No DEVELOPER_ID_APPLICATION set; applying an ad-hoc signature."
-  codesign --deep --force --options runtime --sign - "$APP_PATH"
+  codesign --force --options runtime --sign - "$APP_PATH"
 fi
 
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
