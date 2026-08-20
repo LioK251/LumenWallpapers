@@ -1306,7 +1306,7 @@ final class LockScreenVideoManager {
     private static let aerialProvider = "com.apple.wallpaper.choice.aerials"
     private static let categoryID = "4C554D45-4E00-4000-8000-000000000001"
     private static let subcategoryID = "4C554D45-4E00-4000-8000-000000000002"
-    private static let categoryName = "Lumen Wallpapers"
+    private static let categoryName = "Lumen"
     private static let shotIDPrefix = "LUMEN_"
     private static let previousStoreSuffix = ".before-lumen"
 

@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Only the latest release receives security fixes. The current supported release is `1.0.2.1` in the `1.x` release line.
+Only the latest release receives security fixes. The current supported release is `1.0.2.2` in the `1.x` release line.
 
 ## Reporting a vulnerability
 

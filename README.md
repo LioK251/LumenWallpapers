@@ -1,7 +1,7 @@
-# Lumen Wallpapers
+# Lumen
 
 <p align="center">
-  <img src="docs/images/icon_nobg.png" width="128" alt="Lumen Wallpapers icon">
+  <img src="docs/images/icon_nobg.png" width="128" alt="Lumen icon">
 </p>
 
 <p align="center">
@@ -14,7 +14,7 @@
   <img src="https://img.shields.io/badge/macOS-14%2B-111111?style=flat-square&logo=apple&logoColor=white" alt="macOS 14 or newer">
 </p>
 
-![Lumen Wallpapers window](docs/images/lumenwallpaper.png)
+![Lumen window](docs/images/lumenwallpaper.png)
 
 ## Why Lumen
 
@@ -37,13 +37,13 @@ Lumen keeps your desktop calm and alive without subscriptions, accounts, or a cl
 ### Download a release
 
 1. Open the [Releases](../../releases) page.
-2. Download the latest `LumenWallpapers-<version>.dmg`.
-3. Open the DMG and drag **Lumen Wallpapers** to **Applications**.
+2. Download the latest `Lumen-<version>.dmg`.
+3. Open the DMG and drag **Lumen** to **Applications**.
 4. Launch the app from Applications.
 
 Release DMGs built with the included script are universal (`arm64` + `x86_64`). Unsigned builds may show a Gatekeeper warning; see [Release signing](#release-signing) for a trusted distribution build.
 
-For a trusted local or ad-hoc build, Control-click **Lumen Wallpapers.app**, choose **Open**, and confirm. If macOS still blocks it after the first launch attempt, open **System Settings > Privacy & Security > Open Anyway**. Only bypass Gatekeeper for artifacts you built yourself or obtained from a source you trust.
+For a trusted local or ad-hoc build, Control-click **Lumen.app**, choose **Open**, and confirm. If macOS still blocks it after the first launch attempt, open **System Settings > Privacy & Security > Open Anyway**. Only bypass Gatekeeper for artifacts you built yourself or obtained from a source you trust.
 
 ### Build from source
 
@@ -75,7 +75,7 @@ Click `+` in the top bar or **Import media** in the preview. Lumen copies select
 
 For smooth loops, use a 16:9 or 16:10 clip at 1080p or 4K, around 10–30 seconds long, with matching first and last frames. Wallpaper audio is muted by design.
 
-Select an imported video and turn on **Video Wallpaper** in the **Settings** tab. Lumen adds a copy of the video and a generated preview to macOS's Aerials catalog, where it appears under the **Lumen Wallpapers** category in **System Settings > Wallpaper**. It selects the same asset for Desktop and Idle, which is the wallpaper macOS uses behind the lock-screen interface. Turn the option off to remove Lumen's catalog entry and restore the previous wallpaper selection.
+Select an imported video and turn on **Video Wallpaper** in the **Settings** tab. Lumen adds a copy of the video and a generated preview to macOS's Aerials catalog, where it appears under the **Lumen** category in **System Settings > Wallpaper**. It selects the same asset for Desktop and Idle, which is the wallpaper macOS uses behind the lock-screen interface. Turn the option off to remove Lumen's catalog entry and restore the previous wallpaper selection.
 
 The Settings tab also includes battery-aware quality reduction, automatic pause for full-screen apps or sustained CPU load, Retina rendering, and launch-at-login. These preferences are stored locally. When the Mac or its displays sleep, Lumen removes its wallpaper windows and releases video playback, then restores the wallpaper after wake.
 
@@ -88,7 +88,7 @@ The repository includes [`scripts/build-release.sh`](scripts/build-release.sh), 
 ```sh
 export DEVELOPER_ID_APPLICATION="Developer ID Application: Your Name (TEAMID)"
 export KEYCHAIN_PROFILE="lumen-notary"
-./scripts/build-release.sh 1.0.2.1
+./scripts/build-release.sh 1.0.2.2
 ```
 
 Create the `notarytool` keychain profile once with `xcrun notarytool store-credentials`. The script signs with hardened runtime, submits the DMG for notarization, and staples the ticket. A notarized, Developer ID-signed DMG is what gives users the normal “open” experience without an unidentified-developer warning.
@@ -107,4 +107,4 @@ Bug reports, feature ideas, and pull requests are welcome. Please read [CONTRIBU
 
 ## License
 
-Lumen Wallpapers is available under the [MIT License](LICENSE).
+Lumen is available under the [MIT License](LICENSE).

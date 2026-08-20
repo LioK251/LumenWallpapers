@@ -1,6 +1,6 @@
 # Privacy
 
-Lumen Wallpapers is designed to work locally.
+Lumen is designed to work locally.
 
 - No account, telemetry, advertising, analytics, or tracking SDKs are included.
 - The app does not make network requests.

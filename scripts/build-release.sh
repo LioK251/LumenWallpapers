@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${1:-1.0.2.1}"
+VERSION="${1:-1.0.2.2}"
 if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)*([.-][0-9A-Za-z.-]+)?$ ]]; then
-  echo "Version must look like 1.0.2 or 1.0.2.1-beta.1" >&2
+  echo "Version must look like 1.0.2 or 1.0.2.2-beta.1" >&2
   exit 1
 fi
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 RELEASE_DIR="$ROOT_DIR/.release"
 ARCHIVE_PATH="$RELEASE_DIR/LumenWallpapers.xcarchive"
-APP_PATH="$ARCHIVE_PATH/Products/Applications/LumenWallpapers.app"
+APP_PATH="$ARCHIVE_PATH/Products/Applications/Lumen.app"
 DMG_ROOT="$RELEASE_DIR/dmg-root"
-DMG_PATH="$ROOT_DIR/LumenWallpapers-${VERSION}.dmg"
+DMG_PATH="$ROOT_DIR/Lumen-${VERSION}.dmg"
 
 rm -rf "$RELEASE_DIR" "$DMG_PATH"
 mkdir -p "$RELEASE_DIR" "$DMG_ROOT"
 
-echo "Building Lumen Wallpapers ${VERSION} (arm64 + x86_64)..."
+echo "Building Lumen ${VERSION} (arm64 + x86_64)..."
 xcodebuild \
   -project "$ROOT_DIR/LumenWallpapers.xcodeproj" \
   -scheme LumenWallpapers \
@@ -42,18 +42,18 @@ else
 fi
 
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
-ARCHITECTURES="$(lipo -archs "$APP_PATH/Contents/MacOS/LumenWallpapers")"
+ARCHITECTURES="$(lipo -archs "$APP_PATH/Contents/MacOS/Lumen")"
 if [[ "$ARCHITECTURES" != *arm64* || "$ARCHITECTURES" != *x86_64* ]]; then
   echo "Expected a universal binary, found: $ARCHITECTURES" >&2
   exit 1
 fi
 
-ditto "$APP_PATH" "$DMG_ROOT/Lumen Wallpapers.app"
+ditto "$APP_PATH" "$DMG_ROOT/Lumen.app"
 ln -s /Applications "$DMG_ROOT/Applications"
 
 echo "Creating $DMG_PATH..."
 hdiutil create \
-  -volname "Lumen Wallpapers ${VERSION}" \
+  -volname "Lumen ${VERSION}" \
   -srcfolder "$DMG_ROOT" \
   -ov \
   -format UDZO \

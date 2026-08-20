@@ -1,6 +1,14 @@
 # Changelog
 
-All notable changes to Lumen Wallpapers are documented here.
+All notable changes to Lumen are documented here.
+
+## [1.0.2.2] - 2026-08-20
+
+### Changed
+
+- Renamed the user-facing app and release artifact from Lumen Wallpapers to Lumen.
+- Updated the Aerials catalog category name to Lumen.
+- Prepared the release tooling and project metadata for version `1.0.2.2`.
 
 ## [1.0.2.1] - 2026-08-20
 
