@@ -123,6 +123,7 @@ final class WallpaperModel: NSObject, ObservableObject {
     private var systemTimer: Timer?
     private var systemConditionsTask: Task<Void, Never>?
     private var workspaceObservers: [NSObjectProtocol] = []
+    private var screenConfigurationObserver: NSObjectProtocol?
     private var occludedWallpaperScreens = Set<String>()
 
     private let libraryURL: URL
@@ -272,16 +273,29 @@ final class WallpaperModel: NSObject, ObservableObject {
             }
         }
         desktopController = controller
+        screenConfigurationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.syncDesktopWallpaper()
+            }
+        }
         syncDesktopWallpaper()
     }
 
     private func updateWallpaperOcclusion(screenKey: String, isVisible: Bool) {
+        let wasPlaying = effectiveIsPlaying
         if isVisible {
             occludedWallpaperScreens.remove(screenKey)
         } else {
             occludedWallpaperScreens.insert(screenKey)
         }
         isFullscreenAppActive = !occludedWallpaperScreens.isEmpty
+        if effectiveIsPlaying != wasPlaying {
+            syncDesktopWallpaper()
+        }
     }
 
     func syncDesktopWallpaper() {
@@ -1303,6 +1317,16 @@ final class DesktopWallpaperController {
 
         // Sleep keeps the window and player objects alive; wake-up only changes visibility.
         if isSuspended {
+            for (index, screen) in screens.enumerated() where index < hostViews.count {
+                updateWindow(
+                    at: index,
+                    screen: screen,
+                    wallpaper: wallpaper,
+                    isPlaying: false,
+                    reducedQuality: reducedQuality,
+                    retinaRendering: retinaRendering
+                )
+            }
             removeOcclusionObservers()
             windowScreenKeys.forEach { onOcclusionChange?($0, true) }
             windows.forEach { $0.orderOut(nil) }
