@@ -123,6 +123,7 @@ final class WallpaperModel: NSObject, ObservableObject {
     private var systemTimer: Timer?
     private var systemConditionsTask: Task<Void, Never>?
     private var workspaceObservers: [NSObjectProtocol] = []
+    private var occludedWallpaperScreens = Set<String>()
 
     private let libraryURL: URL
     private let builtIns: [Wallpaper] = [
@@ -232,12 +233,6 @@ final class WallpaperModel: NSObject, ObservableObject {
     }
 
     private func updateSystemConditions() {
-        let wasPlaying = effectiveIsPlaying
-        isFullscreenAppActive = FullscreenApplicationDetector.isAnotherAppFullscreen()
-        if effectiveIsPlaying != wasPlaying {
-            syncDesktopWallpaper()
-        }
-
         systemConditionsTask?.cancel()
         let sampler = performanceSampler
         systemConditionsTask = Task { @MainActor [weak self] in
@@ -270,8 +265,23 @@ final class WallpaperModel: NSObject, ObservableObject {
 
     func startDesktopWallpaper() {
         guard desktopController == nil else { return }
-        desktopController = DesktopWallpaperController()
+        let controller = DesktopWallpaperController()
+        controller.onOcclusionChange = { [weak self] screenKey, isVisible in
+            Task { @MainActor [weak self] in
+                self?.updateWallpaperOcclusion(screenKey: screenKey, isVisible: isVisible)
+            }
+        }
+        desktopController = controller
         syncDesktopWallpaper()
+    }
+
+    private func updateWallpaperOcclusion(screenKey: String, isVisible: Bool) {
+        if isVisible {
+            occludedWallpaperScreens.remove(screenKey)
+        } else {
+            occludedWallpaperScreens.insert(screenKey)
+        }
+        isFullscreenAppActive = !occludedWallpaperScreens.isEmpty
     }
 
     func syncDesktopWallpaper() {
@@ -1228,37 +1238,6 @@ actor SystemPerformanceSampler {
     }
 }
 
-enum FullscreenApplicationDetector {
-    static func isAnotherAppFullscreen() -> Bool {
-        guard let frontmostApplication = NSWorkspace.shared.frontmostApplication,
-              frontmostApplication.processIdentifier != ProcessInfo.processInfo.processIdentifier,
-              let windows = CGWindowListCopyWindowInfo(
-                [.optionOnScreenOnly, .excludeDesktopElements],
-                kCGNullWindowID
-              ) as? [[String: Any]] else {
-            return false
-        }
-
-        return windows.contains { window in
-            guard let ownerPID = window[kCGWindowOwnerPID as String] as? pid_t,
-                  ownerPID == frontmostApplication.processIdentifier,
-                  let layer = window[kCGWindowLayer as String] as? Int,
-                  layer == 0,
-                  let boundsDictionary = window[kCGWindowBounds as String] as? NSDictionary else {
-                return false
-            }
-            var bounds = CGRect.zero
-            guard CGRectMakeWithDictionaryRepresentation(boundsDictionary as CFDictionary, &bounds) else {
-                return false
-            }
-            return NSScreen.screens.contains { screen in
-                bounds.width >= screen.frame.width * 0.98
-                    && bounds.height >= screen.frame.height * 0.98
-            }
-        }
-    }
-}
-
 extension Color { init(hex: String) { let value = UInt64(hex, radix: 16) ?? 0; self.init(red: Double((value >> 16) & 0xff) / 255, green: Double((value >> 8) & 0xff) / 255, blue: Double(value & 0xff) / 255) } }
 
 private extension NSColor {
@@ -1282,7 +1261,12 @@ private extension NSScreen {
 
 @MainActor
 final class DesktopWallpaperController {
+    var onOcclusionChange: ((_ screenKey: String, _ isVisible: Bool) -> Void)?
+
     private var windows: [NSWindow] = []
+    private var windowScreenKeys: [String] = []
+    private var occlusionObservers: [NSObjectProtocol] = []
+
     func apply(
         wallpaper: Wallpaper,
         isPlaying: Bool,
@@ -1291,6 +1275,9 @@ final class DesktopWallpaperController {
         retinaRendering: Bool,
         isSuspended: Bool
     ) {
+        removeOcclusionObservers()
+        windowScreenKeys.forEach { onOcclusionChange?($0, true) }
+        windowScreenKeys.removeAll()
         windows.forEach { $0.orderOut(nil) }
         windows.removeAll()
         guard !isSuspended else { return }
@@ -1323,9 +1310,29 @@ final class DesktopWallpaperController {
             hostView.wantsLayer = true
             hostView.layer?.contentsScale = retinaRendering ? screen.backingScaleFactor : 1
             window.contentView = hostView
+            let screenKey = screen.persistenceKey
+            let observer = NotificationCenter.default.addObserver(
+                forName: NSWindow.didChangeOcclusionStateNotification,
+                object: window,
+                queue: .main
+            ) { [weak self, weak window] _ in
+                Task { @MainActor [weak self, weak window] in
+                    guard let self, let window else { return }
+                    self.onOcclusionChange?(screenKey, window.occlusionState.contains(.visible))
+                }
+            }
+            occlusionObservers.append(observer)
             window.orderFrontRegardless()
             windows.append(window)
+            windowScreenKeys.append(screenKey)
+            onOcclusionChange?(screenKey, window.occlusionState.contains(.visible))
         }
+    }
+
+    private func removeOcclusionObservers() {
+        let notificationCenter = NotificationCenter.default
+        occlusionObservers.forEach(notificationCenter.removeObserver)
+        occlusionObservers.removeAll()
     }
 }
 
