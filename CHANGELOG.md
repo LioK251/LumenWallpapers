@@ -2,6 +2,15 @@
 
 All notable changes to Lumen are documented here.
 
+## [1.0.2.3] - 2026-08-20
+
+### Performance
+
+- Moved CPU and battery sampling off the main actor onto a utility task with serialized sampler state.
+- Replaced fullscreen window polling with immediate desktop-window occlusion events.
+- Reused wallpaper windows, hosting views, and video players for play/pause, CPU, fullscreen, sleep, and display-scale state changes.
+- Split procedural wallpaper rendering into a static gradient layer and an animated blob layer; default animation cadence is now 24 FPS.
+
 ## [1.0.2.2] - 2026-08-20
 
 ### Changed

@@ -796,7 +796,7 @@ struct LiveWallpaperCanvas: View {
     let reducedQuality: Bool
 
     private var frameInterval: Double {
-        reducedQuality ? 1.0 / 15.0 : 1.0 / 30.0
+        reducedQuality ? 1.0 / 15.0 : 1.0 / 24.0
     }
 
     private var blobCount: Int {
@@ -804,34 +804,48 @@ struct LiveWallpaperCanvas: View {
     }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: isPlaying ? frameInterval : 3600, paused: !isPlaying)) { context in
-            Canvas { graphics, size in
-                let rect = CGRect(origin: .zero, size: size)
-                graphics.fill(
-                    Path(rect),
-                    with: .linearGradient(
-                        Gradient(colors: wallpaper.swiftColors.map { $0.opacity(0.9) }),
-                        startPoint: CGPoint(x: 0, y: size.height),
-                        endPoint: CGPoint(x: size.width, y: 0)
-                    )
-                )
-                let t = context.date.timeIntervalSinceReferenceDate
-                for index in 0..<blobCount {
-                    let x = size.width * (0.12 + CGFloat(index % 3) * 0.39) + sin(t * 0.2 + Double(index)) * (reducedQuality ? 48 : 90)
-                    let y = size.height * (0.18 + CGFloat(index / 3) * 0.32) + cos(t * 0.16 + Double(index)) * (reducedQuality ? 28 : 52)
-                    let radius = (reducedQuality ? 64 : 80) + CGFloat(index * (reducedQuality ? 6 : 9))
-                    graphics.fill(
-                        Path(ellipseIn: CGRect(x: x - radius, y: y - radius, width: radius * 2, height: radius * 2)),
-                        with: .radialGradient(
-                            Gradient(colors: [wallpaper.swiftColors[index % wallpaper.swiftColors.count].opacity(0.56), .clear]),
-                            center: CGPoint(x: x, y: y),
-                            startRadius: 0,
-                            endRadius: radius
+        ZStack {
+            StaticWallpaperBackground(colors: wallpaper.swiftColors)
+            TimelineView(.animation(minimumInterval: isPlaying ? frameInterval : 3600, paused: !isPlaying)) { context in
+                Canvas { graphics, size in
+                    let rect = CGRect(origin: .zero, size: size)
+                    let t = context.date.timeIntervalSinceReferenceDate
+                    for index in 0..<blobCount {
+                        let x = size.width * (0.12 + CGFloat(index % 3) * 0.39) + sin(t * 0.2 + Double(index)) * (reducedQuality ? 48 : 90)
+                        let y = size.height * (0.18 + CGFloat(index / 3) * 0.32) + cos(t * 0.16 + Double(index)) * (reducedQuality ? 28 : 52)
+                        let radius = (reducedQuality ? 64 : 80) + CGFloat(index * (reducedQuality ? 6 : 9))
+                        graphics.fill(
+                            Path(ellipseIn: CGRect(x: x - radius, y: y - radius, width: radius * 2, height: radius * 2)),
+                            with: .radialGradient(
+                                Gradient(colors: [wallpaper.swiftColors[index % wallpaper.swiftColors.count].opacity(0.56), .clear]),
+                                center: CGPoint(x: x, y: y),
+                                startRadius: 0,
+                                endRadius: radius
+                            )
                         )
-                    )
+                    }
+                    // Keep the moving-layer scrim above the blobs; the static gradient is cached below.
+                    graphics.fill(Path(rect), with: .color(.black.opacity(0.12)))
                 }
-                graphics.fill(Path(rect), with: .color(.black.opacity(0.12)))
             }
+        }
+    }
+}
+
+private struct StaticWallpaperBackground: View {
+    let colors: [Color]
+
+    var body: some View {
+        Canvas { graphics, size in
+            let rect = CGRect(origin: .zero, size: size)
+            graphics.fill(
+                Path(rect),
+                with: .linearGradient(
+                    Gradient(colors: colors.map { $0.opacity(0.9) }),
+                    startPoint: CGPoint(x: 0, y: size.height),
+                    endPoint: CGPoint(x: size.width, y: 0)
+                )
+            )
         }
     }
 }

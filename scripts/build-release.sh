@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${1:-1.0.2.2}"
+VERSION="${1:-1.0.2.3}"
 if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)*([.-][0-9A-Za-z.-]+)?$ ]]; then
-  echo "Version must look like 1.0.2 or 1.0.2.2-beta.1" >&2
+  echo "Version must look like 1.0.2 or 1.0.2.3-beta.1" >&2
   exit 1
 fi
 
