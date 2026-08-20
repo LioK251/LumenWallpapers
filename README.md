@@ -9,6 +9,7 @@
 </p>
 
 <p align="center">
+  <a href="https://iumen.vercel.app/"><img src="https://img.shields.io/badge/website-iumen.vercel.app-1d63f2?style=flat-square" alt="Website"></a>
   <img src="https://img.shields.io/badge/Swift-6.0-F05138?style=flat-square&logo=swift&logoColor=white" alt="Swift 6">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2ea44f?style=flat-square" alt="MIT license"></a>
   <img src="https://img.shields.io/badge/macOS-14%2B-111111?style=flat-square&logo=apple&logoColor=white" alt="macOS 14 or newer">
@@ -33,6 +34,8 @@ Lumen keeps your desktop calm and alive without subscriptions, accounts, or a cl
 - **Offline-first by design**: imported media stays in `~/Library/Application Support/LumenWallpapers/Library`.
 
 ## Install
+
+Visit the [website](https://iumen.vercel.app/) for an overview of Lumen, or grab a build directly below.
 
 ### Download a release
 
