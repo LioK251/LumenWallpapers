@@ -444,6 +444,8 @@ struct DashboardView: View {
                 reducedQuality: model.isReducedQualityActive,
                 retinaRendering: model.retinaRendering
             )
+            Color.black.opacity(0.12)
+                .ignoresSafeArea()
             LinearGradient(colors: [.black.opacity(0.08), .clear, .black.opacity(0.84)], startPoint: .top, endPoint: .bottom).ignoresSafeArea()
             VStack(spacing: 0) {
                 TopGlassBar(model: model, showImportHelp: $showImportHelp)

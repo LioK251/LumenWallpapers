@@ -88,7 +88,7 @@ The repository includes [`scripts/build-release.sh`](scripts/build-release.sh), 
 ```sh
 export DEVELOPER_ID_APPLICATION="Developer ID Application: Your Name (TEAMID)"
 export KEYCHAIN_PROFILE="lumen-notary"
-./scripts/build-release.sh 1.0.2
+./scripts/build-release.sh 1.0.2.1
 ```
 
 Create the `notarytool` keychain profile once with `xcrun notarytool store-credentials`. The script signs with hardened runtime, submits the DMG for notarization, and staples the ticket. A notarized, Developer ID-signed DMG is what gives users the normal “open” experience without an unidentified-developer warning.

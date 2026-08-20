@@ -2,6 +2,13 @@
 
 All notable changes to Lumen Wallpapers are documented here.
 
+## [1.0.2.1] - 2026-08-20
+
+### Changed
+
+- Added a subtle dark overlay to improve contrast between the application interface and animated wallpapers.
+- Prepared the release tooling and project metadata for version `1.0.2.1`.
+
 ## [1.0.2] - 2026-08-19
 
 ### Added
