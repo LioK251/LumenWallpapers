@@ -8,8 +8,22 @@ import UniformTypeIdentifiers
 import IOKit.ps
 import Darwin
 
+@MainActor
+final class LumenApplicationDelegate: NSObject, NSApplicationDelegate {
+    var reopenMainWindow: (() -> Void)?
+
+    func applicationShouldHandleReopen(
+        _ sender: NSApplication,
+        hasVisibleWindows flag: Bool
+    ) -> Bool {
+        reopenMainWindow?()
+        return true
+    }
+}
+
 @main
 struct LumenWallpapersApp: App {
+    @NSApplicationDelegateAdaptor(LumenApplicationDelegate.self) private var applicationDelegate
     @StateObject private var model = WallpaperModel()
     @Environment(\.openWindow) private var openWindow
 
@@ -25,8 +39,8 @@ struct LumenWallpapersApp: App {
     }
 
     var body: some Scene {
-        WindowGroup(id: "main") {
-            DashboardView(model: model)
+        Window("Lumen", id: "main") {
+            MainWindowRoot(model: model, applicationDelegate: applicationDelegate)
                 .frame(minWidth: 1080, minHeight: 720)
                 .preferredColorScheme(.dark)
         }
@@ -42,6 +56,25 @@ struct LumenWallpapersApp: App {
             Button("Open Lumen") { showMainWindow() }
             Button("Quit") { NSApp.terminate(nil) }
         }
+    }
+}
+
+private struct MainWindowRoot: View {
+    @ObservedObject var model: WallpaperModel
+    let applicationDelegate: LumenApplicationDelegate
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        DashboardView(model: model)
+            .onAppear {
+                applicationDelegate.reopenMainWindow = {
+                    NSApp.unhide(nil)
+                    openWindow(id: "main")
+                    DispatchQueue.main.async {
+                        NSApp.activate(ignoringOtherApps: true)
+                    }
+                }
+            }
     }
 }
 
