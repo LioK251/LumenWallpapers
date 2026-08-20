@@ -89,6 +89,7 @@ struct Wallpaper: Identifiable, Hashable, Codable {
     var category: String
     var kind: WallpaperKind
     var sourceURL: String?
+    var attributionURL: String? = nil
 
     var swiftColors: [Color] { colors.map { Color(hex: $0) } }
     var url: URL? { sourceURL.flatMap(URL.init(fileURLWithPath:)) }
@@ -110,6 +111,9 @@ final class WallpaperModel: NSObject, ObservableObject {
     private static let pauseOnFullscreenDefaultsKey = "pauseOnFullscreen"
     private static let pauseOnHighCPUDefaultsKey = "pauseOnHighCPU"
     private static let retinaRenderingDefaultsKey = "retinaRendering"
+    private static let pexelsAPIKeyDefaultsKey = "pexelsAPIKey"
+    private static let wallhavenAPIKeyDefaultsKey = "wallhavenAPIKey"
+    private static let allowNSFWSearchDefaultsKey = "allowNSFWSearch"
 
     @Published var selected: Wallpaper
     @Published var isPlaying: Bool {
@@ -160,6 +164,25 @@ final class WallpaperModel: NSObject, ObservableObject {
     @Published private(set) var cpuUsage = 0.0
     @Published private(set) var isSystemSleeping = false
     @Published private(set) var areScreensSleeping = false
+    @Published var pexelsAPIKey: String {
+        didSet {
+            UserDefaults.standard.set(pexelsAPIKey, forKey: Self.pexelsAPIKeyDefaultsKey)
+            refreshRecommendations()
+        }
+    }
+    @Published var wallhavenAPIKey: String {
+        didSet {
+            UserDefaults.standard.set(wallhavenAPIKey, forKey: Self.wallhavenAPIKeyDefaultsKey)
+            refreshRecommendations()
+        }
+    }
+    @Published var allowNSFWSearch: Bool {
+        didSet {
+            UserDefaults.standard.set(allowNSFWSearch, forKey: Self.allowNSFWSearchDefaultsKey)
+            refreshRecommendations()
+        }
+    }
+    @Published private(set) var recommendations: [DiscoverRecommendation] = []
 
     private var desktopController: DesktopWallpaperController?
     private let lockScreenVideoManager: LockScreenVideoManager
@@ -169,6 +192,7 @@ final class WallpaperModel: NSObject, ObservableObject {
     private var workspaceObservers: [NSObjectProtocol] = []
     private var screenConfigurationObserver: NSObjectProtocol?
     private var occludedWallpaperScreens = Set<String>()
+    private var recommendationTask: Task<Void, Never>?
 
     private let libraryURL: URL
     private let builtIns: [Wallpaper] = [
@@ -186,6 +210,9 @@ final class WallpaperModel: NSObject, ObservableObject {
         pauseOnFullscreen = Self.storedBool(forKey: Self.pauseOnFullscreenDefaultsKey, defaultValue: true)
         pauseOnHighCPU = Self.storedBool(forKey: Self.pauseOnHighCPUDefaultsKey, defaultValue: true)
         retinaRendering = Self.storedBool(forKey: Self.retinaRenderingDefaultsKey, defaultValue: true)
+        pexelsAPIKey = UserDefaults.standard.string(forKey: Self.pexelsAPIKeyDefaultsKey) ?? ""
+        wallhavenAPIKey = UserDefaults.standard.string(forKey: Self.wallhavenAPIKeyDefaultsKey) ?? ""
+        allowNSFWSearch = Self.storedBool(forKey: Self.allowNSFWSearchDefaultsKey, defaultValue: false)
         try? FileManager.default.createDirectory(at: libraryURL, withIntermediateDirectories: true)
         LegacyWallpaperMigration.cleanupOldSnapshotState(directory: libraryURL)
         let stored = WallpaperModel.loadLibrary(from: libraryURL.appendingPathComponent("library.json"))
@@ -306,6 +333,44 @@ final class WallpaperModel: NSObject, ObservableObject {
         let source = activeTab == "My Library" ? wallpapers.filter { $0.kind != .procedural } : wallpapers
         guard !searchText.isEmpty else { return source }
         return source.filter { $0.title.localizedCaseInsensitiveContains(searchText) || $0.category.localizedCaseInsensitiveContains(searchText) }
+    }
+
+    func wallpaperForWallhaven(_ item: WallhavenWallpaper) -> Wallpaper? {
+        wallpapers.first {
+            $0.attributionURL == item.url
+                || $0.sourceURL?.contains("wallhaven-\(item.id)") == true
+                || $0.title == "Wallhaven \(item.id)"
+        }
+    }
+
+    func wallpaperForPexels(_ item: PexelsVideo) -> Wallpaper? {
+        wallpapers.first {
+            $0.attributionURL == item.url
+                || $0.sourceURL?.contains("pexels-\(item.id)") == true
+                || $0.title == "Pexels \(item.id)"
+        }
+    }
+
+    func refreshRecommendations() {
+        recommendationTask?.cancel()
+        let apiKey = pexelsAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        recommendationTask = Task { @MainActor [weak self] in
+            var items: [DiscoverRecommendation] = []
+            if let imageResult = try? await WallhavenAPI.search(
+                query: "",
+                page: 1,
+                sorting: "random",
+                includeNSFW: self?.allowNSFWSearch ?? false,
+                apiKey: self?.wallhavenAPIKey ?? ""
+            ) {
+                items.append(contentsOf: imageResult.items.shuffled().prefix(4).map(DiscoverRecommendation.image))
+            }
+            if !apiKey.isEmpty, let videoResult = try? await PexelsAPI.search(query: "wallpaper", page: 1, apiKey: apiKey) {
+                items.append(contentsOf: videoResult.items.shuffled().prefix(4).map(DiscoverRecommendation.video))
+            }
+            guard !Task.isCancelled else { return }
+            self?.recommendations = items.shuffled()
+        }
     }
 
     func startDesktopWallpaper() {
@@ -432,11 +497,100 @@ final class WallpaperModel: NSObject, ObservableObject {
         } catch { importError = "Could not import this file: \(error.localizedDescription)" }
     }
 
+    func downloadWallhaven(_ item: WallhavenWallpaper) async -> Bool {
+        guard let remoteURL = URL(string: item.path) else {
+            importError = "That wallpaper doesn't have a downloadable file."
+            return false
+        }
+        do {
+            let (tempURL, response) = try await URLSession.shared.download(from: remoteURL)
+            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                try? FileManager.default.removeItem(at: tempURL)
+                importError = "Could not download this wallpaper (server error)."
+                return false
+            }
+            let fallback = WebPageMetadata.suggestedName(
+                from: response,
+                remoteURL: remoteURL,
+                sourceURL: item.source.flatMap(URL.init(string:))
+            ) ?? "Wallpaper \(item.id)"
+            let title = await WebPageMetadata.title(for: item.url, fallback: fallback)
+            let ext = remoteURL.pathExtension.isEmpty ? "jpg" : remoteURL.pathExtension
+            let destination = uniqueDestination(named: safeFileStem(title), ext: ext)
+            try? FileManager.default.removeItem(at: destination)
+            try FileManager.default.moveItem(at: tempURL, to: destination)
+            let wallpaper = Wallpaper(
+                id: UUID(),
+                title: title,
+                subtitle: "\(item.resolution) · from Wallhaven",
+                symbol: "photo.fill",
+                colors: ["334155", "0F172A"],
+                category: "Discover",
+                kind: .image,
+                sourceURL: destination.path,
+                attributionURL: item.url
+            )
+            wallpapers.append(wallpaper)
+            persistImported()
+            select(wallpaper)
+            return true
+        } catch {
+            importError = "Could not download this wallpaper: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    func downloadPexelsVideo(_ video: PexelsVideo) async -> Bool {
+        guard let file = video.bestDownloadFile, let remoteURL = URL(string: file.link) else {
+            importError = "This Pexels video doesn't have a downloadable file."
+            return false
+        }
+        do {
+            let (tempURL, response) = try await URLSession.shared.download(from: remoteURL)
+            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                try? FileManager.default.removeItem(at: tempURL)
+                importError = "Could not download this video (server error)."
+                return false
+            }
+            let fallback = WebPageMetadata.suggestedName(from: response, remoteURL: remoteURL)
+                ?? "Pexels Video \(video.id)"
+            let title = await WebPageMetadata.title(for: video.url, fallback: fallback)
+            let destination = uniqueDestination(named: safeFileStem(title), ext: "mp4")
+            try? FileManager.default.removeItem(at: destination)
+            try FileManager.default.moveItem(at: tempURL, to: destination)
+            let wallpaper = Wallpaper(
+                id: UUID(),
+                title: title,
+                subtitle: "\(file.width ?? video.width)×\(file.height ?? video.height) · from Pexels",
+                symbol: "play.rectangle.fill",
+                colors: ["334155", "0F172A"],
+                category: "Discover",
+                kind: .video,
+                sourceURL: destination.path,
+                attributionURL: video.url
+            )
+            wallpapers.append(wallpaper)
+            persistImported()
+            select(wallpaper)
+            return true
+        } catch {
+            importError = "Could not download this video: \(error.localizedDescription)"
+            return false
+        }
+    }
+
     private func uniqueDestination(named: String, ext: String) -> URL {
         var candidate = libraryURL.appendingPathComponent("\(named).\(ext)")
         var index = 2
         while FileManager.default.fileExists(atPath: candidate.path) { candidate = libraryURL.appendingPathComponent("\(named) \(index).\(ext)"); index += 1 }
         return candidate
+    }
+
+    private func safeFileStem(_ title: String) -> String {
+        let invalid = CharacterSet(charactersIn: "/:*?\"<>|\\")
+        let cleaned = title.components(separatedBy: invalid).joined(separator: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.isEmpty ? "wallpaper" : String(cleaned.prefix(96))
     }
 
     private func persistImported() {
@@ -499,19 +653,27 @@ struct DashboardView: View {
                     VStack(alignment: .leading, spacing: 32) {
                         if model.activeTab == "Home" {
                             HeroShowcase(model: model)
-                            WallpaperRow(title: "Recommended for you", wallpapers: Array(model.filteredWallpapers.prefix(6)), model: model, onRename: { renameTarget = $0 }, onRemove: { removeTarget = $0 })
+                            if model.recommendations.isEmpty {
+                                WallpaperRow(title: "Recommended for you", wallpapers: Array(model.filteredWallpapers.prefix(6)), model: model, onRename: { renameTarget = $0 }, onRemove: { removeTarget = $0 })
+                            } else {
+                                RecommendationRow(model: model, recommendations: model.recommendations)
+                            }
                             WallpaperRow(title: "My media", wallpapers: model.wallpapers.filter { $0.kind != .procedural }, model: model, emptyText: "Import a video or image to start your library", onRename: { renameTarget = $0 }, onRemove: { removeTarget = $0 })
                             PerformanceBar(model: model)
+                        } else if model.activeTab == "Discover" {
+                            DiscoverView(model: model)
                         } else if model.activeTab == "Settings" {
                             SettingsView(model: model)
                         } else {
-                            LibraryGrid(model: model, wallpapers: model.filteredWallpapers, title: model.activeTab == "Explore" ? "Explore all wallpapers" : "My Library", emptyText: model.activeTab == "Explore" ? "No wallpapers match your search" : "Import a video or image to start your library", onRename: { renameTarget = $0 }, onRemove: { removeTarget = $0 })
+                            LibraryGrid(model: model, wallpapers: model.filteredWallpapers, title: "My Library", emptyText: "Import a video or image to start your library", onRename: { renameTarget = $0 }, onRemove: { removeTarget = $0 })
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 46)
                     .padding(.top, 12)
                     .padding(.bottom, 36)
                 }
+                .frame(maxWidth: .infinity)
             }
         }
         .alert("Import failed", isPresented: Binding(get: { model.importError != nil }, set: { if !$0 { model.importError = nil } })) { Button("OK") {} } message: { Text(model.importError ?? "") }
@@ -532,8 +694,7 @@ struct DashboardView: View {
             }
         }
         .onAppear { model.startDesktopWallpaper() }
-        .animation(.easeInOut(duration: 0.36), value: model.selected.id)
-        .animation(.easeInOut(duration: 0.24), value: model.activeTab)
+        .task { model.refreshRecommendations() }
     }
 }
 
@@ -556,11 +717,10 @@ struct FullscreenWallpaperBackground: View {
             }
         }
         .id(wallpaper.id)
-        .transition(.opacity)
+        .transition(.identity)
         .ignoresSafeArea()
         .scaleEffect(1.01)
         .environment(\.displayScale, retinaRendering && !reducedQuality ? nativeDisplayScale : 1)
-        .animation(.easeInOut(duration: 0.55), value: wallpaper.id)
     }
 }
 
@@ -571,11 +731,9 @@ struct TopGlassBar: View {
             Spacer()
 
             HStack(spacing: 3) {
-                ForEach(["Home", "Explore", "My Library", "Settings"], id: \.self) { tab in
+                ForEach(["Home", "Discover", "My Library", "Settings"], id: \.self) { tab in
                     Button(tab) {
-                        withAnimation(.easeInOut(duration: 0.28)) {
-                            model.activeTab = tab
-                        }
+                        model.activeTab = tab
                     }
                         .buttonStyle(GlassTabStyle(isSelected: model.activeTab == tab))
                 }
@@ -650,10 +808,9 @@ struct HeroShowcase: View {
             }
         }
         .id(model.selected.id)
-        .transition(.opacity.combined(with: .move(edge: .bottom)))
+        .transition(.opacity)
         .frame(maxWidth: .infinity, minHeight: 430, alignment: .bottomLeading)
         .padding(.bottom, 8)
-        .animation(.easeInOut(duration: 0.42), value: model.selected.id)
     }
 }
 
@@ -671,9 +828,7 @@ struct WallpaperRow: View {
                 Spacer()
                 if !wallpapers.isEmpty {
                     Button {
-                        withAnimation(.easeInOut(duration: 0.28)) {
-                            model.activeTab = title == "My media" ? "My Library" : "Explore"
-                        }
+                        model.activeTab = "My Library"
                     } label: {
                         Text("See all")
                             .font(.system(size: 12, weight: .medium))
@@ -703,6 +858,100 @@ struct WallpaperRow: View {
             }
         }
         .animation(.easeInOut(duration: 0.24), value: wallpapers.map(\.id))
+    }
+}
+
+struct RecommendationRow: View {
+    @ObservedObject var model: WallpaperModel
+    let recommendations: [DiscoverRecommendation]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("Recommended for you")
+                    .font(.system(size: 22, weight: .semibold, design: .rounded))
+                Spacer()
+                Button {
+                    model.refreshRecommendations()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(GlassIconStyle())
+                .help("Refresh recommendations")
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 14) {
+                    ForEach(recommendations) { recommendation in
+                        RecommendationCard(recommendation: recommendation, model: model)
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct RecommendationCard: View {
+    let recommendation: DiscoverRecommendation
+    @ObservedObject var model: WallpaperModel
+    @State private var isDownloading = false
+
+    private var downloadedWallpaper: Wallpaper? {
+        switch recommendation {
+        case .image(let item): return model.wallpaperForWallhaven(item)
+        case .video(let item): return model.wallpaperForPexels(item)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ZStack(alignment: .bottomTrailing) {
+                AsyncImage(url: recommendation.previewURL) { phase in
+                    switch phase {
+                    case .success(let image): image.resizable().scaledToFill()
+                    case .failure: Color.black.opacity(0.3)
+                    default: Color.black.opacity(0.2).overlay(ProgressView().controlSize(.small))
+                    }
+                }
+                .frame(width: 220, height: 132)
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+                .contentShape(RoundedRectangle(cornerRadius: 16))
+                .onTapGesture {
+                    if let downloadedWallpaper { model.select(downloadedWallpaper) }
+                }
+
+                Button {
+                    if let downloadedWallpaper {
+                        model.select(downloadedWallpaper)
+                    } else {
+                        isDownloading = true
+                        Task {
+                            switch recommendation {
+                            case .image(let item): _ = await model.downloadWallhaven(item)
+                            case .video(let item): _ = await model.downloadPexelsVideo(item)
+                            }
+                            isDownloading = false
+                        }
+                    }
+                } label: {
+                    if isDownloading {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: downloadedWallpaper == nil ? "arrow.down" : "checkmark")
+                    }
+                }
+                .buttonStyle(CardActionButtonStyle())
+                .padding(9)
+                .help(downloadedWallpaper == nil ? "Download and use wallpaper" : "Use downloaded wallpaper")
+            }
+            Text(recommendation.title)
+                .font(.system(size: 14, weight: .semibold))
+                .lineLimit(1)
+            Text(recommendation.subtitle)
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.56))
+        }
+        .frame(width: 220, alignment: .leading)
     }
 }
 
@@ -1049,6 +1298,29 @@ struct SettingsView: View {
                 )
             }
 
+            SettingsSection(title: "Discover Sources") {
+                SettingsTextFieldRow(
+                    title: "Wallhaven API Key",
+                    description: "Optional key from wallhaven.cc/account — required by Wallhaven for NSFW results.",
+                    symbol: "photo.badge.checkmark",
+                    placeholder: "Paste your Wallhaven API key",
+                    text: $model.wallhavenAPIKey
+                )
+                SettingsTextFieldRow(
+                    title: "Pexels API Key",
+                    description: "Free key from pexels.com/api — powers video results in the Discover tab.",
+                    symbol: "video.badge.plus",
+                    placeholder: "Paste your Pexels API key",
+                    text: $model.pexelsAPIKey
+                )
+                SettingsToggleRow(
+                    title: "Include NSFW image results",
+                    description: "Allow Wallhaven searches to include NSFW and sketchy content.",
+                    symbol: "eye.trianglebadge.exclamationmark",
+                    isOn: $model.allowNSFWSearch
+                )
+            }
+
             SettingsSection(title: "System") {
                 SettingsToggleRow(
                     title: "Video Wallpaper",
@@ -1105,6 +1377,42 @@ private struct SettingsSection<Content: View>: View {
             .padding(.horizontal, 18)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.12)))
+        }
+    }
+}
+
+private struct SettingsTextFieldRow: View {
+    let title: String
+    let description: String
+    let symbol: String
+    let placeholder: String
+    @Binding var text: String
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: symbol)
+                .font(.system(size: 16, weight: .semibold))
+                .frame(width: 24)
+                .foregroundStyle(.cyan)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 14, weight: .semibold))
+                Text(description)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.55))
+            }
+            Spacer(minLength: 14)
+            SecureField(placeholder, text: $text)
+                .textFieldStyle(.plain)
+                .padding(.horizontal, 10)
+                .frame(width: 220, height: 30)
+                .background(.black.opacity(0.2), in: RoundedRectangle(cornerRadius: 8))
+        }
+        .padding(.vertical, 14)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(.white.opacity(0.08))
+                .frame(height: 1)
         }
     }
 }
@@ -2023,6 +2331,753 @@ enum LegacyWallpaperMigration {
         let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
         for file in files where file.pathExtension.lowercased() == "png" && file.lastPathComponent.hasPrefix("lock-screen-snapshot") {
             try? FileManager.default.removeItem(at: file)
+        }
+    }
+}
+
+// MARK: - Wallhaven Discover
+
+struct WallhavenThumbs: Codable, Hashable {
+    let large: String
+    let original: String
+    let small: String
+}
+
+struct WallhavenWallpaper: Codable, Identifiable, Hashable {
+    let id: String
+    let url: String
+    let short_url: String
+    let source: String?
+    let resolution: String
+    let file_type: String
+    let category: String
+    let purity: String
+    let path: String
+    let thumbs: WallhavenThumbs
+}
+
+private struct WallhavenMeta: Codable {
+    let current_page: Int?
+    let last_page: Int?
+}
+
+private struct WallhavenSearchResponse: Codable {
+    let data: [WallhavenWallpaper]
+    let meta: WallhavenMeta?
+}
+
+enum WallhavenError: LocalizedError {
+    case invalidResponse
+    case rateLimited
+    case unauthorized
+    case http(Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidResponse: return "Wallhaven returned an unexpected response."
+        case .rateLimited: return "Too many requests to Wallhaven — please wait a moment and try again."
+        case .unauthorized: return "Wallhaven rejected the API key. Check it in Settings."
+        case .http(let code): return "Wallhaven request failed (HTTP \(code))."
+        }
+    }
+}
+
+private enum WallhavenAPI {
+    static func search(
+        query: String,
+        page: Int = 1,
+        sorting: String? = nil,
+        includeNSFW: Bool = false,
+        apiKey: String = ""
+    ) async throws -> (items: [WallhavenWallpaper], currentPage: Int, lastPage: Int) {
+        var components = URLComponents(string: "https://wallhaven.cc/api/v1/search")!
+        var queryItems = [
+            URLQueryItem(name: "categories", value: "111"),
+            URLQueryItem(name: "purity", value: includeNSFW ? "111" : "100"),
+            URLQueryItem(name: "sorting", value: sorting ?? (query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "toplist" : "relevance")),
+            URLQueryItem(name: "page", value: String(page))
+        ]
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { queryItems.append(URLQueryItem(name: "q", value: trimmed)) }
+        let trimmedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedAPIKey.isEmpty {
+            queryItems.append(URLQueryItem(name: "apikey", value: trimmedAPIKey))
+        }
+        components.queryItems = queryItems
+
+        let request = URLRequest(url: components.url!)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw WallhavenError.invalidResponse }
+        if http.statusCode == 401 { throw WallhavenError.unauthorized }
+        if http.statusCode == 429 { throw WallhavenError.rateLimited }
+        guard (200...299).contains(http.statusCode) else { throw WallhavenError.http(http.statusCode) }
+        let decoded = try JSONDecoder().decode(WallhavenSearchResponse.self, from: data)
+        return (decoded.data, decoded.meta?.current_page ?? page, decoded.meta?.last_page ?? page)
+    }
+}
+
+private enum WebPageMetadata {
+    static func title(for page: String, fallback: String) async -> String {
+        guard let url = URL(string: page) else { return fallback }
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else { return fallback }
+            let html = String(decoding: data, as: UTF8.self)
+            let htmlRange = NSRange(html.startIndex..<html.endIndex, in: html)
+            if let metaExpression = try? NSRegularExpression(pattern: #"<meta\b[^>]*>"#, options: [.caseInsensitive]) {
+                for match in metaExpression.matches(in: html, options: [], range: htmlRange) {
+                    guard let tagRange = Range(match.range, in: html) else { continue }
+                    let tag = String(html[tagRange])
+                    guard let key = attribute(named: "property", in: tag) ?? attribute(named: "name", in: tag),
+                          ["og:title", "twitter:title", "title"].contains(key.lowercased()),
+                          let content = attribute(named: "content", in: tag),
+                          let value = cleanedTitle(content, fallback: fallback) else { continue }
+                    return value
+                }
+            }
+            for pattern in [#"<title[^>]*>(.*?)</title>"#, #"<h1[^>]*>(.*?)</h1>"#] {
+                guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]),
+                      let match = expression.firstMatch(in: html, options: [], range: htmlRange),
+                      match.numberOfRanges > 1,
+                      let valueRange = Range(match.range(at: 1), in: html),
+                      let value = cleanedTitle(String(html[valueRange]), fallback: fallback) else { continue }
+                return value
+            }
+        } catch {
+            // A readable fallback title is still better than failing the download.
+        }
+        return fallback
+    }
+
+    static func suggestedName(
+        from response: URLResponse,
+        remoteURL: URL,
+        sourceURL: URL? = nil
+    ) -> String? {
+        if let http = response as? HTTPURLResponse,
+           let disposition = http.value(forHTTPHeaderField: "Content-Disposition"),
+           let filename = attribute(named: "filename", in: disposition),
+           let title = cleanedTitle(URL(fileURLWithPath: filename).deletingPathExtension().lastPathComponent, fallback: "") {
+            return title
+        }
+        for url in [sourceURL, remoteURL].compactMap({ $0 }) {
+            let stem = url.deletingPathExtension().lastPathComponent
+            if let title = cleanedTitle(stem, fallback: "") { return title }
+        }
+        return nil
+    }
+
+    private static func attribute(named name: String, in value: String) -> String? {
+        let pattern = #"\b"# + NSRegularExpression.escapedPattern(for: name) + #"\s*=\s*[\"']([^\"']*)[\"']"#
+        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+              let match = expression.firstMatch(in: value, options: [], range: NSRange(value.startIndex..<value.endIndex, in: value)),
+              let range = Range(match.range(at: 1), in: value) else { return nil }
+        return decodeHTMLEntities(String(value[range])).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func cleanedTitle(_ raw: String, fallback: String) -> String? {
+        let value = decodeHTMLEntities(raw)
+            .replacingOccurrences(of: "Wallhaven - ", with: "", options: .caseInsensitive)
+            .replacingOccurrences(of: " - Wallhaven", with: "", options: .caseInsensitive)
+            .replacingOccurrences(of: "Wallhaven wallpaper", with: "", options: .caseInsensitive)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, value.lowercased() != "wallhaven" else { return nil }
+
+        let withoutSiteSuffix = value
+            .replacingOccurrences(of: #"\s*[-|]\s*wallhaven\.cc\s*$"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\s*\|\s*\d{3,5}x\d{3,5}\s+wallpaper\s*$"#, with: "", options: [.regularExpression, .caseInsensitive])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !withoutSiteSuffix.isEmpty else { return nil }
+
+        let normalized = withoutSiteSuffix.replacingOccurrences(of: "_", with: "-")
+        let looksLikeWallhavenID = normalized.range(of: #"^(?:wallhaven[-_])?#?[a-z0-9]{5,10}$"#, options: [.regularExpression, .caseInsensitive]) != nil
+        let looksLikeGeneratedID = normalized.range(of: #"^(?:wallpaper|pexels(?:[- ]video)?)[-_ ]?[a-z0-9]+$"#, options: [.regularExpression, .caseInsensitive]) != nil
+        if looksLikeWallhavenID || looksLikeGeneratedID {
+            return fallback.isEmpty ? nil : fallback
+        }
+        return withoutSiteSuffix
+    }
+
+    private static func decodeHTMLEntities(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&#39;", with: "'")
+            .replacingOccurrences(of: "&#039;", with: "'")
+            .replacingOccurrences(of: "&#x27;", with: "'")
+            .replacingOccurrences(of: "&#x2F;", with: "/")
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+    }
+}
+
+enum DiscoverRecommendation: Identifiable, Hashable {
+    case image(WallhavenWallpaper)
+    case video(PexelsVideo)
+
+    var id: String {
+        switch self {
+        case .image(let item): return "image-\(item.id)"
+        case .video(let item): return "video-\(item.id)"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .image(let item): return "Wallpaper \(item.id)"
+        case .video(let item): return "Video \(item.id)"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .image(let item): return "\(item.resolution) · Wallhaven"
+        case .video(let item): return "\(item.width)×\(item.height) · Pexels"
+        }
+    }
+
+    var previewURL: URL? {
+        switch self {
+        case .image(let item): return URL(string: item.thumbs.large)
+        case .video(let item): return item.previewImageURL
+        }
+    }
+}
+
+@MainActor
+final class WallhavenBrowseModel: ObservableObject {
+    @Published var query: String = ""
+    @Published private(set) var results: [WallhavenWallpaper] = []
+    @Published private(set) var isLoading = false
+    @Published var errorMessage: String?
+
+    private var currentPage = 1
+    private var lastPage = 1
+    private var searchTask: Task<Void, Never>?
+    private var hasSearchedOnce = false
+
+    func runSearch(includeNSFW: Bool = false, apiKey: String = "") {
+        searchTask?.cancel()
+        hasSearchedOnce = true
+        let q = query
+        searchTask = Task { [weak self] in
+            await self?.performSearch(query: q, page: 1, append: false, includeNSFW: includeNSFW, apiKey: apiKey)
+        }
+    }
+
+    func loadMoreIfNeeded(currentItem item: WallhavenWallpaper, includeNSFW: Bool = false, apiKey: String = "") {
+        guard hasSearchedOnce, !isLoading, currentPage < lastPage, results.last?.id == item.id else { return }
+        let q = query
+        let nextPage = currentPage + 1
+        searchTask = Task { [weak self] in
+            await self?.performSearch(query: q, page: nextPage, append: true, includeNSFW: includeNSFW, apiKey: apiKey)
+        }
+    }
+
+    private func performSearch(query: String, page: Int, append: Bool, includeNSFW: Bool, apiKey: String) async {
+        isLoading = true
+        errorMessage = nil
+        do {
+            let (items, current, last) = try await WallhavenAPI.search(query: query, page: page, includeNSFW: includeNSFW, apiKey: apiKey)
+            guard !Task.isCancelled else { isLoading = false; return }
+            currentPage = current
+            lastPage = last
+            results = append ? results + items : items
+        } catch {
+            if !Task.isCancelled {
+                errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            }
+        }
+        isLoading = false
+    }
+}
+
+enum DiscoverSource: String, CaseIterable, Identifiable {
+    case wallhaven = "Images"
+    case pexels = "Video"
+    var id: String { rawValue }
+}
+
+struct DiscoverView: View {
+    @ObservedObject var model: WallpaperModel
+    @State private var source: DiscoverSource = .wallhaven
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                Text("Discover")
+                    .font(.system(size: 28, weight: .semibold, design: .rounded))
+                Spacer()
+                Picker("", selection: $source) {
+                    ForEach(DiscoverSource.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 160)
+            }
+
+            if source == .wallhaven {
+                WallhavenDiscoverPane(model: model)
+            } else {
+                PexelsDiscoverPane(model: model)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct WallhavenDiscoverPane: View {
+    @ObservedObject var model: WallpaperModel
+    @StateObject private var browse = WallhavenBrowseModel()
+    private let columns = [GridItem(.adaptive(minimum: 220), spacing: 18)]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                Text("Wallpaper images")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.7))
+                Spacer()
+                Link("Browse on wallhaven.cc ↗", destination: URL(string: "https://wallhaven.cc")!)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.55))
+            }
+
+            HStack(spacing: 8) {
+                HStack(spacing: 7) {
+                    Image(systemName: "magnifyingglass")
+                    TextField("Search Wallhaven (e.g. \"cyberpunk\", \"nature\")", text: $browse.query)
+                        .textFieldStyle(.plain)
+                        .onSubmit { browse.runSearch(includeNSFW: model.allowNSFWSearch, apiKey: model.wallhavenAPIKey) }
+                }
+                .padding(.horizontal, 12)
+                .frame(height: 38)
+                .background(.black.opacity(0.2), in: Capsule())
+                .frame(maxWidth: 380)
+
+                Button("Search") { browse.runSearch(includeNSFW: model.allowNSFWSearch, apiKey: model.wallhavenAPIKey) }
+                    .buttonStyle(LiquidButtonStyle())
+            }
+
+            Text(model.allowNSFWSearch ? "Wallhaven results include NSFW and sketchy content. Wallpapers are community-submitted — tap a card's link to check the uploader's terms before commercial use." : "SFW results only, pulled from Wallhaven's public API. Wallpapers are community-submitted — tap a card's link to check the uploader's terms before commercial use.")
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.5))
+
+            if let error = browse.errorMessage {
+                Text(error)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.orange)
+            }
+
+            if browse.results.isEmpty && !browse.isLoading {
+                Text("Search above to browse wallpapers you can import into your library.")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.white.opacity(0.58))
+                    .padding(.vertical, 32)
+            } else {
+                LazyVGrid(columns: columns, alignment: .leading, spacing: 24) {
+                    ForEach(browse.results) { item in
+                        WallhavenCard(item: item, model: model)
+                            .onAppear { browse.loadMoreIfNeeded(currentItem: item, includeNSFW: model.allowNSFWSearch, apiKey: model.wallhavenAPIKey) }
+                    }
+                }
+            }
+
+            if browse.isLoading {
+                HStack {
+                    Spacer()
+                    ProgressView().controlSize(.small)
+                    Spacer()
+                }
+                .padding(.vertical, 12)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onAppear { if browse.results.isEmpty { browse.runSearch(includeNSFW: model.allowNSFWSearch, apiKey: model.wallhavenAPIKey) } }
+        .onChange(of: model.allowNSFWSearch) { _, includeNSFW in
+            browse.runSearch(includeNSFW: includeNSFW, apiKey: model.wallhavenAPIKey)
+        }
+        .onChange(of: model.wallhavenAPIKey) { _, apiKey in
+            browse.runSearch(includeNSFW: model.allowNSFWSearch, apiKey: apiKey)
+        }
+    }
+}
+
+struct WallhavenCard: View {
+    let item: WallhavenWallpaper
+    @ObservedObject var model: WallpaperModel
+    @State private var isHovered = false
+    @State private var isDownloading = false
+    private var downloadedWallpaper: Wallpaper? {
+        model.wallpaperForWallhaven(item)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ZStack(alignment: .bottomTrailing) {
+                AsyncImage(url: URL(string: item.thumbs.large)) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image.resizable().scaledToFill()
+                    case .failure:
+                        Color.black.opacity(0.3)
+                    default:
+                        Color.black.opacity(0.2).overlay(ProgressView().controlSize(.small))
+                    }
+                }
+                .frame(width: 220, height: 132)
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+                .contentShape(RoundedRectangle(cornerRadius: 16))
+                .onTapGesture {
+                    if let downloadedWallpaper { model.select(downloadedWallpaper) }
+                }
+
+                Button {
+                    if let downloadedWallpaper {
+                        model.select(downloadedWallpaper)
+                    } else if !isDownloading {
+                        isDownloading = true
+                        Task {
+                            _ = await model.downloadWallhaven(item)
+                            isDownloading = false
+                        }
+                    }
+                } label: {
+                    if isDownloading {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: downloadedWallpaper == nil ? "arrow.down" : "checkmark")
+                    }
+                }
+                .buttonStyle(CardActionButtonStyle())
+                .padding(9)
+                .help(downloadedWallpaper == nil ? "Download and use wallpaper" : "Use downloaded wallpaper")
+            }
+            Text(item.resolution)
+                .font(.system(size: 14, weight: .semibold))
+                .lineLimit(1)
+            Link("View on Wallhaven", destination: URL(string: item.url) ?? URL(string: "https://wallhaven.cc")!)
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.5))
+        }
+        .frame(width: 220, alignment: .leading)
+        .scaleEffect(isHovered ? 1.025 : 1)
+        .opacity(isHovered ? 1 : 0.94)
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.18)) { isHovered = hovering }
+        }
+    }
+}
+
+// MARK: - Pexels Video Discover
+
+struct PexelsVideoFile: Codable, Hashable {
+    let id: Int
+    let quality: String?
+    let width: Int?
+    let height: Int?
+    let file_type: String?
+    let link: String
+}
+
+struct PexelsVideoPicture: Codable, Hashable {
+    let id: Int
+    let picture: String
+}
+
+struct PexelsVideo: Codable, Identifiable, Hashable {
+    let id: Int
+    let width: Int
+    let height: Int
+    let duration: Int
+    let url: String
+    let video_files: [PexelsVideoFile]
+    let video_pictures: [PexelsVideoPicture]
+
+    /// Largest MP4 file at or below 4K, so we never pull down an 8K master by accident.
+    var bestDownloadFile: PexelsVideoFile? {
+        let mp4Files = video_files.filter { ($0.file_type ?? "").contains("mp4") }
+        return mp4Files.filter { ($0.width ?? 0) > 0 && ($0.width ?? 0) <= 3840 }
+            .max { ($0.width ?? 0) < ($1.width ?? 0) }
+            ?? mp4Files.max { ($0.width ?? 0) < ($1.width ?? 0) }
+    }
+
+    var previewImageURL: URL? { URL(string: video_pictures.first?.picture ?? "") }
+
+    var durationLabel: String {
+        String(format: "%d:%02d", duration / 60, duration % 60)
+    }
+}
+
+private struct PexelsSearchResponse: Codable {
+    let videos: [PexelsVideo]
+    let page: Int
+    let total_results: Int
+    let next_page: String?
+}
+
+enum PexelsError: LocalizedError {
+    case missingAPIKey
+    case invalidResponse
+    case rateLimited
+    case unauthorized
+    case http(Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .missingAPIKey: return "Add a free Pexels API key in Settings to browse videos."
+        case .invalidResponse: return "Pexels returned an unexpected response."
+        case .rateLimited: return "Too many requests to Pexels — please wait a moment and try again."
+        case .unauthorized: return "That Pexels API key was rejected. Double-check it in Settings."
+        case .http(let code): return "Pexels request failed (HTTP \(code))."
+        }
+    }
+}
+
+private enum PexelsAPI {
+    static func search(query: String, page: Int, apiKey: String) async throws -> (items: [PexelsVideo], hasMore: Bool) {
+        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedKey.isEmpty else { throw PexelsError.missingAPIKey }
+
+        var components = URLComponents(string: "https://api.pexels.com/videos/search")!
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        components.queryItems = [
+            URLQueryItem(name: "query", value: trimmedQuery.isEmpty ? "wallpaper" : trimmedQuery),
+            URLQueryItem(name: "per_page", value: "24"),
+            URLQueryItem(name: "page", value: String(page)),
+            URLQueryItem(name: "orientation", value: "landscape"),
+            URLQueryItem(name: "size", value: "large")
+        ]
+
+        var request = URLRequest(url: components.url!)
+        request.setValue(trimmedKey, forHTTPHeaderField: "Authorization")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw PexelsError.invalidResponse }
+        if http.statusCode == 401 { throw PexelsError.unauthorized }
+        if http.statusCode == 429 { throw PexelsError.rateLimited }
+        guard (200...299).contains(http.statusCode) else { throw PexelsError.http(http.statusCode) }
+        let decoded = try JSONDecoder().decode(PexelsSearchResponse.self, from: data)
+        return (decoded.videos, decoded.next_page != nil)
+    }
+}
+
+@MainActor
+final class PexelsBrowseModel: ObservableObject {
+    @Published var query: String = ""
+    @Published private(set) var results: [PexelsVideo] = []
+    @Published private(set) var isLoading = false
+    @Published var errorMessage: String?
+
+    private var currentPage = 1
+    private var hasMorePages = false
+    private var searchTask: Task<Void, Never>?
+
+    func runSearch(apiKey: String) {
+        searchTask?.cancel()
+        let q = query
+        searchTask = Task { [weak self] in
+            await self?.performSearch(query: q, page: 1, append: false, apiKey: apiKey)
+        }
+    }
+
+    func loadMoreIfNeeded(currentItem item: PexelsVideo, apiKey: String) {
+        guard !isLoading, hasMorePages, results.last?.id == item.id else { return }
+        let q = query
+        let nextPage = currentPage + 1
+        searchTask = Task { [weak self] in
+            await self?.performSearch(query: q, page: nextPage, append: true, apiKey: apiKey)
+        }
+    }
+
+    private func performSearch(query: String, page: Int, append: Bool, apiKey: String) async {
+        isLoading = true
+        errorMessage = nil
+        do {
+            let (items, hasMore) = try await PexelsAPI.search(query: query, page: page, apiKey: apiKey)
+            guard !Task.isCancelled else { isLoading = false; return }
+            currentPage = page
+            hasMorePages = hasMore
+            results = append ? results + items : items
+        } catch {
+            if !Task.isCancelled {
+                errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            }
+        }
+        isLoading = false
+    }
+}
+
+struct PexelsDiscoverPane: View {
+    @ObservedObject var model: WallpaperModel
+    @StateObject private var browse = PexelsBrowseModel()
+    private let columns = [GridItem(.adaptive(minimum: 220), spacing: 18)]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                Text("Video wallpapers")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.7))
+                Spacer()
+                Link("Get a free Pexels API key ↗", destination: URL(string: "https://www.pexels.com/api/")!)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.55))
+            }
+
+            if model.pexelsAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("No Pexels API key yet")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text("Pexels' free API gives you royalty-free 4K video clips you can set as live wallpapers. Grab a key (instant, no cost) and paste it into Settings → Discover Sources.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.white.opacity(0.6))
+                    Button {
+                        model.activeTab = "Settings"
+                    } label: {
+                        Label("Open Settings", systemImage: "gearshape")
+                    }
+                    .buttonStyle(LiquidButtonStyle())
+                }
+                .padding(18)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+                .overlay(RoundedRectangle(cornerRadius: 14).stroke(.white.opacity(0.12)))
+            } else {
+                HStack(spacing: 8) {
+                    HStack(spacing: 7) {
+                        Image(systemName: "magnifyingglass")
+                        TextField("Search Pexels (e.g. \"rain\", \"city night\")", text: $browse.query)
+                            .textFieldStyle(.plain)
+                            .onSubmit { browse.runSearch(apiKey: model.pexelsAPIKey) }
+                    }
+                    .padding(.horizontal, 12)
+                    .frame(height: 38)
+                    .background(.black.opacity(0.2), in: Capsule())
+                    .frame(maxWidth: 380)
+
+                    Button("Search") { browse.runSearch(apiKey: model.pexelsAPIKey) }
+                        .buttonStyle(LiquidButtonStyle())
+                }
+
+                Text("Royalty-free video clips from Pexels, downloaded at up to 4K. Free to use, no attribution required — the source link on each card is there if you want to credit the creator anyway.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.5))
+
+                if let error = browse.errorMessage {
+                    Text(error)
+                        .font(.system(size: 13))
+                        .foregroundStyle(.orange)
+                }
+
+                if browse.results.isEmpty && !browse.isLoading {
+                    Text("Search above to browse video clips you can import as live wallpapers.")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.white.opacity(0.58))
+                        .padding(.vertical, 32)
+                } else {
+                    LazyVGrid(columns: columns, alignment: .leading, spacing: 24) {
+                        ForEach(browse.results) { item in
+                            PexelsVideoCard(item: item, model: model)
+                                .onAppear { browse.loadMoreIfNeeded(currentItem: item, apiKey: model.pexelsAPIKey) }
+                        }
+                    }
+                }
+
+                if browse.isLoading {
+                    HStack {
+                        Spacer()
+                        ProgressView().controlSize(.small)
+                        Spacer()
+                    }
+                    .padding(.vertical, 12)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onAppear {
+            if browse.results.isEmpty, !model.pexelsAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                browse.runSearch(apiKey: model.pexelsAPIKey)
+            }
+        }
+    }
+}
+
+struct PexelsVideoCard: View {
+    let item: PexelsVideo
+    @ObservedObject var model: WallpaperModel
+    @State private var isHovered = false
+    @State private var isDownloading = false
+
+    private var downloadedWallpaper: Wallpaper? {
+        model.wallpaperForPexels(item)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ZStack(alignment: .bottomTrailing) {
+                AsyncImage(url: item.previewImageURL) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image.resizable().scaledToFill()
+                    case .failure:
+                        Color.black.opacity(0.3)
+                    default:
+                        Color.black.opacity(0.2).overlay(ProgressView().controlSize(.small))
+                    }
+                }
+                .frame(width: 220, height: 132)
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+                .contentShape(RoundedRectangle(cornerRadius: 16))
+                .onTapGesture {
+                    if let downloadedWallpaper { model.select(downloadedWallpaper) }
+                }
+                .overlay(alignment: .topLeading) {
+                    Text(item.durationLabel)
+                        .font(.system(size: 10, weight: .bold))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(.black.opacity(0.55), in: Capsule())
+                        .padding(9)
+                }
+                .overlay {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 11, weight: .bold))
+                        .padding(9)
+                        .background(.black.opacity(0.4), in: Circle())
+                }
+
+                Button {
+                    if let downloadedWallpaper {
+                        model.select(downloadedWallpaper)
+                    } else if !isDownloading {
+                        isDownloading = true
+                        Task {
+                            _ = await model.downloadPexelsVideo(item)
+                            isDownloading = false
+                        }
+                    }
+                } label: {
+                    if isDownloading {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: downloadedWallpaper == nil ? "arrow.down" : "checkmark")
+                    }
+                }
+                .buttonStyle(CardActionButtonStyle())
+                .padding(9)
+                .help(downloadedWallpaper == nil ? "Download and use wallpaper" : "Use downloaded wallpaper")
+            }
+            Text("\(item.width)×\(item.height)")
+                .font(.system(size: 14, weight: .semibold))
+                .lineLimit(1)
+            Link("View on Pexels", destination: URL(string: item.url) ?? URL(string: "https://www.pexels.com")!)
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.5))
+        }
+        .frame(width: 220, alignment: .leading)
+        .scaleEffect(isHovered ? 1.025 : 1)
+        .opacity(isHovered ? 1 : 0.94)
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.18)) { isHovered = hovering }
         }
     }
 }

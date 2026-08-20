@@ -2,6 +2,21 @@
 
 All notable changes to Lumen are documented here.
 
+## [1.0.3] - 2026-08-20
+
+### Added
+
+- Discover support for Wallhaven images and Pexels videos with shuffled Home recommendations.
+- Automatic wallpaper activation after downloading a Discover item.
+- Clickable downloaded Discover cards for switching between remote wallpapers already in the library.
+- Optional Wallhaven API key and NSFW image-search toggle in Settings.
+
+### Changed
+
+- Removed the redundant Explore tab; My Library is the single local collection view.
+- Stabilized selection transitions so the main UI does not slide or disappear during wallpaper changes.
+- Downloaded media now uses a readable title from the source page metadata for its library entry and filename.
+
 ## [1.0.2.3] - 2026-08-20
 
 ### Performance

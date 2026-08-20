@@ -3,7 +3,7 @@
 Lumen is designed to work locally.
 
 - No account, telemetry, advertising, analytics, or tracking SDKs are included.
-- The app does not make network requests.
+- Network requests are made when Discover loads recommendations, when you search Discover, or when you download remote media. Wallhaven requests use the configured search settings, and Pexels requests use the API key you provide. Imported media remains local.
 - Imported files are copied to `~/Library/Application Support/LumenWallpapers/Library` and remain on the Mac.
 - The app stores selected wallpaper, display, and feature preferences in standard macOS app preferences.
 - Video Wallpaper copies the selected local video and a generated preview into the user's macOS wallpaper catalog under `~/Library/Application Support/com.apple.wallpaper/aerials`. No video data leaves the Mac.
