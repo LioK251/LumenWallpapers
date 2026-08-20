@@ -11,9 +11,21 @@ import Darwin
 @main
 struct LumenWallpapersApp: App {
     @StateObject private var model = WallpaperModel()
+    @Environment(\.openWindow) private var openWindow
+
+    private func showMainWindow(tab: String? = nil) {
+        if let tab {
+            model.activeTab = tab
+        }
+        NSApp.unhide(nil)
+        openWindow(id: "main")
+        DispatchQueue.main.async {
+            NSApp.activate(ignoringOtherApps: true)
+        }
+    }
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: "main") {
             DashboardView(model: model)
                 .frame(minWidth: 1080, minHeight: 720)
                 .preferredColorScheme(.dark)
@@ -24,11 +36,10 @@ struct LumenWallpapersApp: App {
         MenuBarExtra("Lumen", systemImage: "sparkles") {
             Button(model.isPlaying ? "Pause Wallpaper" : "Resume Wallpaper") { model.isPlaying.toggle() }
             Button("Settings") {
-                model.activeTab = "Settings"
-                NSApp.activate(ignoringOtherApps: true)
+                showMainWindow(tab: "Settings")
             }
             Divider()
-            Button("Open Lumen") { NSApp.activate(ignoringOtherApps: true) }
+            Button("Open Lumen") { showMainWindow() }
             Button("Quit") { NSApp.terminate(nil) }
         }
     }
