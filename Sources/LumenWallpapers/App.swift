@@ -709,9 +709,14 @@ struct FullscreenWallpaperBackground: View {
             if wallpaper.kind == .procedural {
                 LiveWallpaperCanvas(wallpaper: wallpaper, isPlaying: isPlaying, reducedQuality: reducedQuality)
             } else if wallpaper.kind == .video, let url = wallpaper.url {
-                VideoSurface(url: url, isPlaying: isPlaying, reducedQuality: reducedQuality)
+                VideoSurface(
+                    url: url,
+                    isPlaying: isPlaying,
+                    reducedQuality: reducedQuality,
+                    videoGravity: .resizeAspect
+                )
             } else if let url = wallpaper.url {
-                Image(nsImage: NSImage(contentsOf: url) ?? NSImage()).resizable().scaledToFill()
+                WallpaperPreviewImage(image: NSImage(contentsOf: url) ?? NSImage())
             } else {
                 Color.black
             }
@@ -719,7 +724,6 @@ struct FullscreenWallpaperBackground: View {
         .id(wallpaper.id)
         .transition(.identity)
         .ignoresSafeArea()
-        .scaleEffect(1.01)
         .environment(\.displayScale, retinaRendering && !reducedQuality ? nativeDisplayScale : 1)
     }
 }
@@ -1097,6 +1101,35 @@ struct WallpaperMediaView: View {
     }
 }
 
+/// Keeps unusually wide or tall downloaded media from looking cropped in the app window.
+/// The blurred cover layer fills the window while the sharp layer preserves the full source.
+private struct WallpaperPreviewImage: View {
+    let image: NSImage
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                    .blur(radius: 28)
+                    .opacity(0.58)
+                    .scaleEffect(1.08)
+
+                Color.black.opacity(0.18)
+
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+            .clipped()
+        }
+    }
+}
+
 struct LiveWallpaperCanvas: View {
     let wallpaper: Wallpaper
     let isPlaying: Bool
@@ -1162,11 +1195,12 @@ struct VideoSurface: NSViewRepresentable {
     let url: URL
     let isPlaying: Bool
     let reducedQuality: Bool
+    var videoGravity: AVLayerVideoGravity = .resizeAspectFill
 
     func makeCoordinator() -> Coordinator { Coordinator(url: url, reducedQuality: reducedQuality) }
 
     func makeNSView(context: Context) -> PlayerContainerView {
-        let view = PlayerContainerView()
+        let view = PlayerContainerView(videoGravity: videoGravity)
         view.playerLayer.player = context.coordinator.player
         view.playerLayer.contentsScale = displayScale
         context.coordinator.setPlaying(isPlaying)
@@ -1175,6 +1209,7 @@ struct VideoSurface: NSViewRepresentable {
 
     func updateNSView(_ view: PlayerContainerView, context: Context) {
         view.playerLayer.contentsScale = displayScale
+        view.playerLayer.videoGravity = videoGravity
         context.coordinator.update(url: url, isPlaying: isPlaying, reducedQuality: reducedQuality)
     }
 
@@ -1219,7 +1254,18 @@ struct VideoSurface: NSViewRepresentable {
 
 final class PlayerContainerView: NSView {
     let playerLayer = AVPlayerLayer()
-    override init(frame frameRect: NSRect) { super.init(frame: frameRect); wantsLayer = true; playerLayer.videoGravity = .resizeAspectFill; layer?.addSublayer(playerLayer) }
+    init(videoGravity: AVLayerVideoGravity = .resizeAspectFill) {
+        super.init(frame: .zero)
+        wantsLayer = true
+        playerLayer.videoGravity = videoGravity
+        layer?.addSublayer(playerLayer)
+    }
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        playerLayer.videoGravity = .resizeAspectFill
+        layer?.addSublayer(playerLayer)
+    }
     required init?(coder: NSCoder) { nil }
     override func layout() { super.layout(); playerLayer.frame = bounds }
 }
