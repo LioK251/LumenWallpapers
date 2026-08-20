@@ -709,12 +709,9 @@ struct FullscreenWallpaperBackground: View {
             if wallpaper.kind == .procedural {
                 LiveWallpaperCanvas(wallpaper: wallpaper, isPlaying: isPlaying, reducedQuality: reducedQuality)
             } else if wallpaper.kind == .video, let url = wallpaper.url {
-                VideoSurface(
-                    url: url,
-                    isPlaying: isPlaying,
-                    reducedQuality: reducedQuality,
-                    videoGravity: .resizeAspect
-                )
+                // The app background should always bleed to the window edges.
+                // Aspect-fill avoids black bars on ultra-wide and portrait videos.
+                VideoSurface(url: url, isPlaying: isPlaying, reducedQuality: reducedQuality)
             } else if let url = wallpaper.url {
                 WallpaperPreviewImage(image: NSImage(contentsOf: url) ?? NSImage())
             } else {
@@ -1101,31 +1098,21 @@ struct WallpaperMediaView: View {
     }
 }
 
-/// Keeps unusually wide or tall downloaded media from looking cropped in the app window.
-/// The blurred cover layer fills the window while the sharp layer preserves the full source.
+/// Fills the app window with imported still images.
+///
+/// The app background is intentionally a full-bleed surface: fitting an unusually wide
+/// image (for example, 5000×2237) leaves horizontal bars, so the excess edges are
+/// cropped instead of being replaced with a blurred duplicate of the image.
 private struct WallpaperPreviewImage: View {
     let image: NSImage
 
     var body: some View {
         GeometryReader { proxy in
-            ZStack {
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: proxy.size.width, height: proxy.size.height)
-                    .blur(radius: 28)
-                    .opacity(0.58)
-                    .scaleEffect(1.08)
-
-                Color.black.opacity(0.18)
-
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: proxy.size.width, height: proxy.size.height)
-            }
-            .frame(width: proxy.size.width, height: proxy.size.height)
-            .clipped()
+            Image(nsImage: image)
+                .resizable()
+                .scaledToFill()
+                .frame(width: proxy.size.width, height: proxy.size.height)
+                .clipped()
         }
     }
 }

@@ -16,7 +16,7 @@ All notable changes to Lumen are documented here.
 - Removed the redundant Explore tab; My Library is the single local collection view.
 - Stabilized selection transitions so the main UI does not slide or disappear during wallpaper changes.
 - Downloaded media now uses a readable title from the source page metadata for its library entry and filename.
-- Made the in-app wallpaper preview aspect-ratio aware, preventing wide and portrait media from appearing zoomed or heavily cropped.
+- Made the in-app wallpaper preview aspect-ratio aware, using full-bleed image and video backgrounds without black bars on wide or portrait media.
 
 ## [1.0.2.3] - 2026-08-20
 
