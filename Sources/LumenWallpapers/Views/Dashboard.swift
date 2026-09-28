@@ -100,7 +100,7 @@ struct FullscreenWallpaperBackground: View {
         ZStack {
             ForEach(layers) { item in
                 media(for: item, onReady: item.id == wallpaper.id ? {
-                    guard layers.last?.id == item.id else { return }
+                    guard layers.first?.id == item.id else { return }
                     guard readyVideoID != item.id else { return }
                     readyVideoID = item.id
                     if outgoingID != nil { fadeOut(transitionID) }
@@ -118,15 +118,22 @@ struct FullscreenWallpaperBackground: View {
             }
             transitionTask?.cancel()
             transitionID = UUID()
-            isFadingOut = false
             readyVideoID = nil
             guard !reduceMotion else {
                 layers = [next]
                 outgoingID = nil
+                isFadingOut = false
                 return
             }
-            let prior = layers.first { $0.id == previous.id } ?? previous
-            layers = [prior, next]
+            if next.id == outgoingID {
+                layers = [next]
+                outgoingID = nil
+                isFadingOut = false
+                return
+            }
+            let prior = isFadingOut ? previous : (layers.first { $0.id == outgoingID } ?? previous)
+            isFadingOut = false
+            layers = [next, prior]
             outgoingID = prior.id
             outgoingOpacity = 1
             let id = transitionID
@@ -283,6 +290,7 @@ struct HeroShowcase: View {
 }
 
 struct WallpaperRow: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let title: String
     let wallpapers: [Wallpaper]
     @ObservedObject var model: WallpaperModel
@@ -325,7 +333,7 @@ struct WallpaperRow: View {
                 }
             }
         }
-        .animation(.easeInOut(duration: 0.24), value: wallpapers.map(\.id))
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.24), value: wallpapers.map(\.id))
     }
 }
 

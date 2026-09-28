@@ -2,6 +2,13 @@
 
 All notable changes to Lumen are documented here.
 
+## [1.0.6] - 2026-09-28
+
+### Fixed
+
+- Corrected preview layer order so wallpaper changes visibly crossfade.
+- Disabled library row animations when macOS Reduce Motion is enabled.
+
 ## [1.0.5] - 2026-09-28
 
 ### Added
