@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import AVKit
 import AVFoundation
+import QuickLookThumbnailing
 
 @MainActor
 enum WallpaperImageCache {
@@ -17,6 +18,67 @@ enum WallpaperImageCache {
         let cost = Int(image.size.width * image.size.height * 4)
         cache.setObject(image, forKey: url as NSURL, cost: cost)
         return image
+    }
+}
+
+@MainActor
+final class VideoPosterCache {
+    static let shared = VideoPosterCache()
+
+    private let cache: NSCache<NSURL, NSImage> = {
+        let cache = NSCache<NSURL, NSImage>()
+        cache.totalCostLimit = 96 * 1024 * 1024
+        return cache
+    }()
+    private var requests: [URL: Task<NSImage?, Never>] = [:]
+
+    func image(for url: URL) async -> NSImage? {
+        if let image = cache.object(forKey: url as NSURL) { return image }
+        if let task = requests[url] { return await task.value }
+
+        let task = Task<NSImage?, Never> {
+            let request = QLThumbnailGenerator.Request(
+                fileAt: url,
+                size: CGSize(width: 440, height: 264),
+                scale: 1,
+                representationTypes: .thumbnail
+            )
+            return try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request).nsImage
+        }
+        requests[url] = task
+        let image = await task.value
+        requests[url] = nil
+        if let image {
+            let cost = Int(image.size.width * image.size.height * 4)
+            cache.setObject(image, forKey: url as NSURL, cost: cost)
+        }
+        return image
+    }
+}
+
+struct VideoPosterView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let url: URL
+    @State private var image: NSImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .transition(.opacity)
+            } else {
+                LinearGradient(colors: [Color(hex: "334155"), Color(hex: "0F172A")], startPoint: .topLeading, endPoint: .bottomTrailing)
+            }
+        }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: image != nil)
+        .task(id: url) {
+            image = nil
+            let poster = await VideoPosterCache.shared.image(for: url)
+            guard !Task.isCancelled else { return }
+            image = poster
+        }
     }
 }
 
@@ -128,6 +190,7 @@ struct VideoSurface: NSViewRepresentable {
     let isPlaying: Bool
     let reducedQuality: Bool
     var videoGravity: AVLayerVideoGravity = .resizeAspectFill
+    var onReady: (() -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(url: url, reducedQuality: reducedQuality) }
 
@@ -135,6 +198,7 @@ struct VideoSurface: NSViewRepresentable {
         let view = PlayerContainerView(videoGravity: videoGravity)
         view.playerLayer.player = context.coordinator.player
         view.playerLayer.contentsScale = displayScale
+        view.onReady = onReady
         context.coordinator.setPlaying(isPlaying)
         return view
     }
@@ -142,6 +206,7 @@ struct VideoSurface: NSViewRepresentable {
     func updateNSView(_ view: PlayerContainerView, context: Context) {
         view.playerLayer.contentsScale = displayScale
         view.playerLayer.videoGravity = videoGravity
+        view.onReady = onReady
         context.coordinator.update(url: url, isPlaying: isPlaying, reducedQuality: reducedQuality)
     }
 
@@ -186,17 +251,39 @@ struct VideoSurface: NSViewRepresentable {
 
 final class PlayerContainerView: NSView {
     let playerLayer = AVPlayerLayer()
+    var onReady: (() -> Void)? {
+        didSet {
+            if playerLayer.isReadyForDisplay {
+                DispatchQueue.main.async { [weak self] in
+                    self?.onReady?()
+                }
+            }
+        }
+    }
+    private var readinessObserver: NSKeyValueObservation?
+
+    private func observeReadiness() {
+        readinessObserver = playerLayer.observe(\.isReadyForDisplay, options: [.new]) { [weak self] layer, _ in
+            guard layer.isReadyForDisplay else { return }
+            DispatchQueue.main.async { [weak self] in
+                self?.onReady?()
+            }
+        }
+    }
+
     init(videoGravity: AVLayerVideoGravity = .resizeAspectFill) {
         super.init(frame: .zero)
         wantsLayer = true
         playerLayer.videoGravity = videoGravity
         layer?.addSublayer(playerLayer)
+        observeReadiness()
     }
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
         playerLayer.videoGravity = .resizeAspectFill
         layer?.addSublayer(playerLayer)
+        observeReadiness()
     }
     required init?(coder: NSCoder) { nil }
     override func layout() { super.layout(); playerLayer.frame = bounds }

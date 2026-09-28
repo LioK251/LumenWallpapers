@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 
 struct DashboardView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var model: WallpaperModel
     @State private var showImportHelp = false
     @State private var renameTarget: Wallpaper?
@@ -39,6 +40,9 @@ struct DashboardView: View {
                             LibraryGrid(model: model, wallpapers: model.filteredWallpapers, title: "My Library", emptyText: "Import a video or image to start your library", onRename: { renameTarget = $0 }, onRemove: { removeTarget = $0 })
                         }
                     }
+                    .id(model.activeTab)
+                    .transition(.opacity)
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: model.activeTab)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 46)
                     .padding(.top, 12)
@@ -70,33 +74,114 @@ struct DashboardView: View {
 }
 
 struct FullscreenWallpaperBackground: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.displayScale) private var nativeDisplayScale
+    @State private var layers: [Wallpaper]
+    @State private var outgoingID: UUID?
+    @State private var outgoingOpacity = 0.0
+    @State private var readyVideoID: UUID?
+    @State private var transitionID = UUID()
+    @State private var transitionTask: Task<Void, Never>?
+    @State private var isFadingOut = false
     let wallpaper: Wallpaper
     let isPlaying: Bool
     let reducedQuality: Bool
     let retinaRendering: Bool
+
+    init(wallpaper: Wallpaper, isPlaying: Bool, reducedQuality: Bool, retinaRendering: Bool) {
+        self.wallpaper = wallpaper
+        self.isPlaying = isPlaying
+        self.reducedQuality = reducedQuality
+        self.retinaRendering = retinaRendering
+        _layers = State(initialValue: [wallpaper])
+    }
+
     var body: some View {
-        Group {
-            if wallpaper.kind == .procedural {
-                LiveWallpaperCanvas(wallpaper: wallpaper, isPlaying: isPlaying, reducedQuality: reducedQuality)
-            } else if wallpaper.kind == .video, let url = wallpaper.url {
-                // The app background should always bleed to the window edges.
-                // Aspect-fill avoids black bars on ultra-wide and portrait videos.
-                VideoSurface(url: url, isPlaying: isPlaying, reducedQuality: reducedQuality)
-            } else if let url = wallpaper.url {
-                WallpaperPreviewImage(image: WallpaperImageCache.image(for: url) ?? NSImage())
-            } else {
-                Color.black
+        ZStack {
+            ForEach(layers) { item in
+                media(for: item, onReady: item.id == wallpaper.id ? {
+                    guard layers.last?.id == item.id else { return }
+                    guard readyVideoID != item.id else { return }
+                    readyVideoID = item.id
+                    if outgoingID != nil { fadeOut(transitionID) }
+                } : nil)
+                .opacity(item.id == outgoingID ? outgoingOpacity : 1)
+                .allowsHitTesting(false)
             }
         }
-        .id(wallpaper.id)
-        .transition(.identity)
         .ignoresSafeArea()
         .environment(\.displayScale, retinaRendering && !reducedQuality ? nativeDisplayScale : 1)
+        .onChange(of: wallpaper) { previous, next in
+            guard previous.id != next.id else {
+                layers = layers.map { $0.id == next.id ? next : $0 }
+                return
+            }
+            transitionTask?.cancel()
+            transitionID = UUID()
+            isFadingOut = false
+            readyVideoID = nil
+            guard !reduceMotion else {
+                layers = [next]
+                outgoingID = nil
+                return
+            }
+            let prior = layers.first { $0.id == previous.id } ?? previous
+            layers = [prior, next]
+            outgoingID = prior.id
+            outgoingOpacity = 1
+            let id = transitionID
+            if next.kind != .video {
+                fadeOut(id)
+            } else {
+                transitionTask = Task {
+                    try? await Task.sleep(for: .milliseconds(800))
+                    guard !Task.isCancelled else { return }
+                    fadeOut(id)
+                }
+            }
+        }
+        .onChange(of: reduceMotion) { _, enabled in
+            if enabled {
+                transitionTask?.cancel()
+                layers = [wallpaper]
+                outgoingID = nil
+            }
+        }
+        .onDisappear { transitionTask?.cancel() }
+    }
+
+    @ViewBuilder
+    private func media(for item: Wallpaper, onReady: (() -> Void)?) -> some View {
+        if item.kind == .procedural {
+            LiveWallpaperCanvas(wallpaper: item, isPlaying: isPlaying, reducedQuality: reducedQuality)
+        } else if item.kind == .video, let url = item.url {
+            VideoSurface(url: url, isPlaying: isPlaying, reducedQuality: reducedQuality, onReady: onReady)
+        } else if let url = item.url {
+            WallpaperPreviewImage(image: WallpaperImageCache.image(for: url) ?? NSImage())
+        } else {
+            Color.black
+        }
+    }
+
+    private func fadeOut(_ id: UUID) {
+        guard transitionID == id, outgoingID != nil, !isFadingOut else { return }
+        transitionTask?.cancel()
+        isFadingOut = true
+        withAnimation(.easeInOut(duration: 0.24)) {
+            outgoingOpacity = 0
+        }
+        transitionTask = Task {
+            try? await Task.sleep(for: .milliseconds(260))
+            guard !Task.isCancelled, transitionID == id else { return }
+            layers.removeAll { $0.id == outgoingID }
+            outgoingID = nil
+        }
     }
 }
 
 struct TopGlassBar: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var tabNamespace
     @ObservedObject var model: WallpaperModel; @Binding var showImportHelp: Bool
     var body: some View {
         HStack {
@@ -107,9 +192,17 @@ struct TopGlassBar: View {
                     Button(tab) {
                         model.activeTab = tab
                     }
-                        .buttonStyle(GlassTabStyle(isSelected: model.activeTab == tab))
+                    .buttonStyle(GlassTabStyle(isSelected: model.activeTab == tab))
+                    .background {
+                        if model.activeTab == tab {
+                            Capsule()
+                                .fill(.white.opacity(0.16))
+                                .matchedGeometryEffect(id: "activeTab", in: tabNamespace)
+                        }
+                    }
                 }
             }
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: model.activeTab)
             .padding(4)
             .background(.ultraThinMaterial, in: Capsule())
             .overlay(Capsule().stroke(.white.opacity(0.18)))
@@ -146,6 +239,7 @@ struct TopGlassBar: View {
 }
 
 struct HeroShowcase: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var model: WallpaperModel
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
@@ -154,12 +248,15 @@ struct HeroShowcase: View {
                 .font(.system(size: 11, weight: .bold))
                 .tracking(1.6)
                 .foregroundStyle(.white.opacity(0.66))
+                .contentTransition(.opacity)
             Text(model.selected.title)
                 .font(.system(size: 46, weight: .semibold, design: .rounded))
                 .lineLimit(1)
+                .contentTransition(.opacity)
             Text(model.selected.subtitle)
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(.white.opacity(0.72))
+                .contentTransition(.opacity)
             HStack(spacing: 9) {
                 Button { model.isPlaying.toggle() } label: {
                     Image(systemName: model.isPlaying ? "pause.fill" : "play.fill")
@@ -179,8 +276,7 @@ struct HeroShowcase: View {
                 .buttonStyle(LiquidButtonStyle())
             }
         }
-        .id(model.selected.id)
-        .transition(.opacity)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: model.selected.id)
         .frame(maxWidth: .infinity, minHeight: 430, alignment: .bottomLeading)
         .padding(.bottom, 8)
     }
@@ -264,9 +360,11 @@ struct RecommendationRow: View {
 }
 
 struct RecommendationCard: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let recommendation: DiscoverRecommendation
     @ObservedObject var model: WallpaperModel
     @State private var isDownloading = false
+    @State private var isHovered = false
 
     private var downloadedWallpaper: Wallpaper? {
         switch recommendation {
@@ -278,7 +376,7 @@ struct RecommendationCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ZStack(alignment: .bottomTrailing) {
-                AsyncImage(url: recommendation.previewURL) { phase in
+                AsyncImage(url: recommendation.previewURL, transaction: Transaction(animation: reduceMotion ? nil : .easeOut(duration: 0.18))) { phase in
                     switch phase {
                     case .success(let image): image.resizable().scaledToFill()
                     case .failure: Color.black.opacity(0.3)
@@ -324,6 +422,10 @@ struct RecommendationCard: View {
                 .foregroundStyle(.white.opacity(0.56))
         }
         .frame(width: 220, alignment: .leading)
+        .scaleEffect(reduceMotion ? 1 : (isHovered ? 1.015 : 1))
+        .opacity(isHovered ? 1 : 0.96)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isHovered)
+        .onHover { isHovered = $0 }
     }
 }
 
@@ -365,6 +467,7 @@ struct LibraryGrid: View {
 }
 
 struct WallpaperCard: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let wallpaper: Wallpaper
     let isSelected: Bool
     let onSelect: () -> Void
@@ -375,7 +478,13 @@ struct WallpaperCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ZStack(alignment: .topTrailing) {
-                WallpaperMediaView(wallpaper: wallpaper, isPlaying: false, reducedQuality: true)
+                Group {
+                    if wallpaper.kind == .video, let url = wallpaper.url {
+                        VideoPosterView(url: url)
+                    } else {
+                        WallpaperMediaView(wallpaper: wallpaper, isPlaying: false, reducedQuality: true)
+                    }
+                }
                     .frame(width: 220, height: 132)
                     .clipShape(RoundedRectangle(cornerRadius: 16))
                     .contentShape(RoundedRectangle(cornerRadius: 16))
@@ -394,6 +503,7 @@ struct WallpaperCard: View {
                         .padding(7)
                         .background(.white, in: Circle())
                         .padding(9)
+                        .transition(.opacity.combined(with: .scale(scale: 0.85)))
                 }
                 if wallpaper.kind != .procedural && isHovered {
                     HStack(spacing: 6) {
@@ -425,17 +535,20 @@ struct WallpaperCard: View {
                 .onTapGesture(perform: onSelect)
         }
         .frame(width: 220, alignment: .leading)
-        .scaleEffect(isHovered ? 1.025 : 1)
-        .opacity(isHovered ? 1 : 0.94)
+        .scaleEffect(reduceMotion ? 1 : (isHovered ? 1.015 : 1))
+        .opacity(isHovered ? 1 : 0.96)
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(isSelected ? 0.65 : 0), lineWidth: 1.5))
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isHovered)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isSelected)
         .onHover { hovering in
-            withAnimation(.easeOut(duration: 0.18)) {
-                isHovered = hovering
-            }
+            isHovered = hovering
         }
     }
 }
 
 struct CardActionButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 11, weight: .semibold))
@@ -444,5 +557,7 @@ struct CardActionButtonStyle: ButtonStyle {
             .background(.ultraThinMaterial, in: Circle())
             .overlay(Circle().stroke(.white.opacity(0.22)))
             .opacity(configuration.isPressed ? 0.65 : 1)
+            .scaleEffect(reduceMotion ? 1 : (configuration.isPressed ? 0.94 : 1))
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }

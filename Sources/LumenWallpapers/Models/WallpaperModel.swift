@@ -28,7 +28,13 @@ final class WallpaperModel: NSObject, ObservableObject {
             syncDesktopWallpaper()
         }
     }
-    @Published var activeTab = "Home"
+    @Published var activeTab = "Home" {
+        didSet {
+            if activeTab == "Settings", Int(cpuUsage.rounded()) != Int(latestCPUUsage.rounded()) {
+                cpuUsage = latestCPUUsage
+            }
+        }
+    }
     @Published var searchText = ""
     @Published private(set) var wallpapers: [Wallpaper]
     @Published var importError: String?
@@ -93,6 +99,7 @@ final class WallpaperModel: NSObject, ObservableObject {
     private var screenConfigurationObserver: NSObjectProtocol?
     private var occludedWallpaperScreens = Set<String>()
     private var recommendationTask: Task<Void, Never>?
+    private var latestCPUUsage = 0.0
 
     private let libraryURL: URL
     private let builtIns: [Wallpaper] = [
@@ -219,11 +226,18 @@ final class WallpaperModel: NSObject, ObservableObject {
     private func applySystemConditions(_ sample: SystemPerformanceSample) {
         let wasPlaying = effectiveIsPlaying
         let wasReducedQuality = isReducedQualityActive
-        isOnBattery = sample.isOnBattery
-        if let cpuUsage = sample.cpuUsage {
-            self.cpuUsage = cpuUsage
+        if isOnBattery != sample.isOnBattery {
+            isOnBattery = sample.isOnBattery
         }
-        isHighCPUUsage = sample.isHighCPUUsage
+        if let cpuUsage = sample.cpuUsage {
+            latestCPUUsage = cpuUsage
+            if activeTab == "Settings", Int(self.cpuUsage.rounded()) != Int(cpuUsage.rounded()) {
+                self.cpuUsage = cpuUsage
+            }
+        }
+        if isHighCPUUsage != sample.isHighCPUUsage {
+            isHighCPUUsage = sample.isHighCPUUsage
+        }
         if effectiveIsPlaying != wasPlaying || isReducedQualityActive != wasReducedQuality {
             syncDesktopWallpaper()
         }
@@ -305,7 +319,10 @@ final class WallpaperModel: NSObject, ObservableObject {
         } else {
             occludedWallpaperScreens.insert(screenKey)
         }
-        isFullscreenAppActive = !occludedWallpaperScreens.isEmpty
+        let fullscreenIsActive = !occludedWallpaperScreens.isEmpty
+        if isFullscreenAppActive != fullscreenIsActive {
+            isFullscreenAppActive = fullscreenIsActive
+        }
         if effectiveIsPlaying != wasPlaying {
             syncDesktopWallpaper()
         }

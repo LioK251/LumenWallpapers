@@ -283,30 +283,38 @@ struct RenameWallpaperView: View {
 }
 
 struct GlassTabStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let isSelected: Bool
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
+            .font(.system(size: 13, weight: .medium))
             .foregroundStyle(.white.opacity(isSelected ? 1 : 0.7))
             .frame(minWidth: 78, minHeight: 36)
             .contentShape(Capsule())
-            .background(isSelected ? .white.opacity(0.16) : .clear, in: Capsule())
             .opacity(configuration.isPressed ? 0.7 : 1)
+            .scaleEffect(reduceMotion ? 1 : (configuration.isPressed ? 0.97 : 1))
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 
 struct GlassIconStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 14, weight: .semibold))
             .frame(width: 36, height: 36)
             .contentShape(Circle())
             .background(.white.opacity(configuration.isPressed ? 0.18 : 0.09), in: Circle())
+            .scaleEffect(reduceMotion ? 1 : (configuration.isPressed ? 0.94 : 1))
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 
 struct LiquidButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 12, weight: .semibold))
@@ -316,5 +324,7 @@ struct LiquidButtonStyle: ButtonStyle {
             .background(.black.opacity(0.35), in: Capsule())
             .overlay(Capsule().stroke(.white.opacity(0.2)))
             .opacity(configuration.isPressed ? 0.72 : 1)
+            .scaleEffect(reduceMotion ? 1 : (configuration.isPressed ? 0.97 : 1))
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }

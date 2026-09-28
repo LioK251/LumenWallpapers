@@ -101,6 +101,7 @@ struct PexelsDiscoverPane: View {
 }
 
 struct PexelsVideoCard: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let item: PexelsVideo
     @ObservedObject var model: WallpaperModel
     @State private var isHovered = false
@@ -113,7 +114,7 @@ struct PexelsVideoCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ZStack(alignment: .bottomTrailing) {
-                AsyncImage(url: item.previewImageURL) { phase in
+                AsyncImage(url: item.previewImageURL, transaction: Transaction(animation: reduceMotion ? nil : .easeOut(duration: 0.18))) { phase in
                     switch phase {
                     case .success(let image):
                         image.resizable().scaledToFill()
@@ -165,6 +166,10 @@ struct PexelsVideoCard: View {
                 .padding(9)
                 .help(downloadedWallpaper == nil ? "Download and use wallpaper" : "Use downloaded wallpaper")
             }
+            .overlay(alignment: .bottomLeading) {
+                DiscoverRemoveButton(wallpaper: downloadedWallpaper, isHovered: isHovered, model: model)
+                    .padding(9)
+            }
             Text("\(item.width)×\(item.height)")
                 .font(.system(size: 14, weight: .semibold))
                 .lineLimit(1)
@@ -173,10 +178,11 @@ struct PexelsVideoCard: View {
                 .foregroundStyle(.white.opacity(0.5))
         }
         .frame(width: 220, alignment: .leading)
-        .scaleEffect(isHovered ? 1.025 : 1)
-        .opacity(isHovered ? 1 : 0.94)
+        .scaleEffect(reduceMotion ? 1 : (isHovered ? 1.015 : 1))
+        .opacity(isHovered ? 1 : 0.96)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isHovered)
         .onHover { hovering in
-            withAnimation(.easeOut(duration: 0.18)) { isHovered = hovering }
+            isHovered = hovering
         }
     }
 }

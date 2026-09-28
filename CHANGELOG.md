@@ -2,6 +2,18 @@
 
 All notable changes to Lumen are documented here.
 
+## [1.0.5] - 2026-09-28
+
+### Added
+
+- Downloaded wallpapers in Discover can be removed from their cards after confirmation.
+
+### Changed
+
+- Added restrained navigation, preview, card, and button transitions that respect Reduce Motion.
+- Library video cards use cached poster images instead of paused players.
+- Reduced unnecessary dashboard updates from CPU and fullscreen status sampling.
+
 ## [1.0.4] - 2026-09-28
 
 ### Changed
