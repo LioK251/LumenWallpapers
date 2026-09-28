@@ -2,6 +2,20 @@
 
 All notable changes to Lumen are documented here.
 
+## [1.0.4] - 2026-09-28
+
+### Changed
+
+- Organized the Swift code into app, model, service, and view files.
+- Cached imported wallpaper images and reduced repeated recommendation requests while editing API keys.
+
+### Fixed
+
+- Prevented older Discover searches from replacing newer results.
+- Made multi-file imports and library updates report failures without leaving incomplete entries or stray copies.
+- Prevented duplicate Discover downloads and corrected display selection when the active display changes.
+- Handled empty saved color palettes, CPU tick rollover, and thumbnail generation for short videos.
+
 ## [1.0.3] - 2026-08-20
 
 ### Added

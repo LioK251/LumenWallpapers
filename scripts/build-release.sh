@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${1:-1.0.3}"
+VERSION="${1:-1.0.4}"
 if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)*([.-][0-9A-Za-z.-]+)?$ ]]; then
-  echo "Version must look like 1.0.3 or 1.0.3-beta.1" >&2
+  echo "Version must look like 1.0.4 or 1.0.4-beta.1" >&2
   exit 1
 fi
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-RELEASE_DIR="$ROOT_DIR/.release"
+RELEASE_DIR="$ROOT_DIR/.release/$VERSION"
 ARCHIVE_PATH="$RELEASE_DIR/LumenWallpapers.xcarchive"
 APP_PATH="$ARCHIVE_PATH/Products/Applications/Lumen.app"
 DMG_ROOT="$RELEASE_DIR/dmg-root"
@@ -28,7 +28,7 @@ xcodebuild \
   ARCHS='arm64 x86_64' \
   ONLY_ACTIVE_ARCH=NO \
   MARKETING_VERSION="$VERSION" \
-  CURRENT_PROJECT_VERSION=1 \
+  CURRENT_PROJECT_VERSION=2 \
   CODE_SIGNING_ALLOWED=NO \
   archive
 
