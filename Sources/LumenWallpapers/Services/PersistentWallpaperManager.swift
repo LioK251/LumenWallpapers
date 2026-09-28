@@ -1,0 +1,74 @@
+import AppKit
+import AVFoundation
+import ImageIO
+import SwiftUI
+import UniformTypeIdentifiers
+
+@MainActor
+enum PersistentWallpaperManager {
+    static func apply(wallpaper: Wallpaper, display: String) throws {
+        if wallpaper.kind == .video, LockScreenVideoManager.isSelected { return }
+        let imageURL = try imageURL(for: wallpaper, in: previewDirectory)
+        NSWorkspace.shared.noteFileSystemChanged(imageURL.path)
+        for screen in DesktopWallpaperController.targetScreens(for: display) {
+            let options = NSWorkspace.shared.desktopImageOptions(for: screen) ?? [:]
+            try NSWorkspace.shared.setDesktopImageURL(imageURL, for: screen, options: options)
+        }
+    }
+
+    private static var previewDirectory: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("LumenWallpapers/PersistentPreviews", isDirectory: true)
+    }
+
+    static func imageURL(for wallpaper: Wallpaper, in directory: URL) throws -> URL {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let destination = directory.appendingPathComponent("Lumen.png")
+
+        let image: CGImage
+        if wallpaper.kind == .image {
+            guard let url = wallpaper.url,
+                  let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let decodedImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+            image = decodedImage
+        } else if wallpaper.kind == .video {
+            guard let url = wallpaper.url else { throw CocoaError(.fileNoSuchFile) }
+            let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: 3840, height: 2160)
+            do {
+                image = try generator.copyCGImage(at: .zero, actualTime: nil)
+            } catch {
+                image = try generator.copyCGImage(at: CMTime(seconds: 0.2, preferredTimescale: 600), actualTime: nil)
+            }
+        } else {
+            let size = CGSize(width: 2560, height: 1440)
+            let renderer = ImageRenderer(content: LiveWallpaperCanvas(
+                wallpaper: wallpaper,
+                isPlaying: false,
+                reducedQuality: false
+            ).frame(width: size.width, height: size.height))
+            renderer.proposedSize = ProposedViewSize(size)
+            renderer.scale = 1
+            guard let renderedImage = renderer.nsImage,
+                  let tiff = renderedImage.tiffRepresentation,
+                  let bitmap = NSBitmapImageRep(data: tiff),
+                  let renderedCGImage = bitmap.cgImage else {
+                throw CocoaError(.fileWriteUnknown)
+            }
+            image = renderedCGImage
+        }
+
+        let staging = directory.appendingPathComponent(".\(UUID().uuidString).png")
+        defer { try? FileManager.default.removeItem(at: staging) }
+        guard let writer = CGImageDestinationCreateWithURL(staging as CFURL, UTType.png.identifier as CFString, 1, nil) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        CGImageDestinationAddImage(writer, image, nil)
+        guard CGImageDestinationFinalize(writer) else { throw CocoaError(.fileWriteUnknown) }
+        try Data(contentsOf: staging).write(to: destination, options: .atomic)
+        return destination
+    }
+}

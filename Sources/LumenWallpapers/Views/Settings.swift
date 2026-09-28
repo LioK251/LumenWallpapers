@@ -70,7 +70,7 @@ struct SettingsView: View {
                 SettingsToggleRow(
                     title: "Retina rendering",
                     description: "Render wallpaper windows at the display's native scale.",
-                    symbol: "sparkles.tv",
+                    symbol: "sparkles",
                     isOn: $model.retinaRendering
                 )
             }
@@ -99,6 +99,12 @@ struct SettingsView: View {
             }
 
             SettingsSection(title: "System") {
+                SettingsToggleRow(
+                    title: "Keep Animating After Quit",
+                    description: "Continue live wallpaper in a small background process after closing Lumen.",
+                    symbol: "sparkles.tv",
+                    isOn: $model.keepAnimatingAfterQuit
+                )
                 SettingsToggleRow(
                     title: "Video Wallpaper",
                     description: "Install the selected video in macOS Wallpaper for Desktop and Lock Screen.",

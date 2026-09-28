@@ -11,6 +11,7 @@ final class WallpaperModel: NSObject, ObservableObject {
     private static let pauseOnFullscreenDefaultsKey = "pauseOnFullscreen"
     private static let pauseOnHighCPUDefaultsKey = "pauseOnHighCPU"
     private static let retinaRenderingDefaultsKey = "retinaRendering"
+    private static let keepAnimatingAfterQuitDefaultsKey = "keepAnimatingAfterQuit"
     private static let pexelsAPIKeyDefaultsKey = "pexelsAPIKey"
     private static let wallhavenAPIKeyDefaultsKey = "wallhavenAPIKey"
     private static let allowNSFWSearchDefaultsKey = "allowNSFWSearch"
@@ -62,6 +63,11 @@ final class WallpaperModel: NSObject, ObservableObject {
         didSet {
             UserDefaults.standard.set(retinaRendering, forKey: Self.retinaRenderingDefaultsKey)
             syncDesktopWallpaper()
+        }
+    }
+    @Published var keepAnimatingAfterQuit: Bool {
+        didSet {
+            UserDefaults.standard.set(keepAnimatingAfterQuit, forKey: Self.keepAnimatingAfterQuitDefaultsKey)
         }
     }
     @Published private(set) var isOnBattery = false
@@ -117,6 +123,7 @@ final class WallpaperModel: NSObject, ObservableObject {
         pauseOnFullscreen = Self.storedBool(forKey: Self.pauseOnFullscreenDefaultsKey, defaultValue: true)
         pauseOnHighCPU = Self.storedBool(forKey: Self.pauseOnHighCPUDefaultsKey, defaultValue: true)
         retinaRendering = Self.storedBool(forKey: Self.retinaRenderingDefaultsKey, defaultValue: true)
+        keepAnimatingAfterQuit = Self.storedBool(forKey: Self.keepAnimatingAfterQuitDefaultsKey, defaultValue: true)
         pexelsAPIKey = UserDefaults.standard.string(forKey: Self.pexelsAPIKeyDefaultsKey) ?? ""
         wallhavenAPIKey = UserDefaults.standard.string(forKey: Self.wallhavenAPIKeyDefaultsKey) ?? ""
         allowNSFWSearch = Self.storedBool(forKey: Self.allowNSFWSearchDefaultsKey, defaultValue: false)
@@ -133,8 +140,8 @@ final class WallpaperModel: NSObject, ObservableObject {
         launchAtLoginEnabled = LaunchAtLoginManager.isEnabled
         if lockScreenVideoManager.hasStoredConfiguration {
             if selected.kind == .video, let url = selected.url {
-                try? lockScreenVideoManager.configure(videoURL: url, title: selected.title)
-            } else if !lockScreenVideoManager.configuredVideoIsAvailable {
+                try? lockScreenVideoManager.configure(videoURL: url)
+            } else {
                 try? lockScreenVideoManager.restorePreviousWallpaper()
             }
             lockScreenVideoEnabled = LockScreenVideoManager.isInstalled
@@ -339,6 +346,43 @@ final class WallpaperModel: NSObject, ObservableObject {
         )
     }
 
+    func handoffWallpaperOnQuit() {
+        do {
+            try PersistentWallpaperManager.apply(wallpaper: selected, display: selectedDisplay)
+        } catch {
+            NSLog("Could not persist the selected wallpaper: %@", error.localizedDescription)
+        }
+
+        guard keepAnimatingAfterQuit,
+              isPlaying,
+              selected.kind == .procedural || (selected.kind == .video && !LockScreenVideoManager.isSelected) else {
+            return
+        }
+
+        do {
+            try WallpaperAgentConfiguration(
+                wallpaper: selected,
+                display: selectedDisplay,
+                isPlaying: isPlaying,
+                reduceQualityOnBattery: reduceQualityOnBattery,
+                pauseOnFullscreen: pauseOnFullscreen,
+                pauseOnHighCPU: pauseOnHighCPU,
+                retinaRendering: retinaRendering
+            ).save()
+            let agentURL = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/LumenWallpaperAgent")
+            guard FileManager.default.isExecutableFile(atPath: agentURL.path) else {
+                NSLog("Lumen wallpaper agent is unavailable at %@", agentURL.path)
+                return
+            }
+            let agent = Process()
+            agent.executableURL = agentURL
+            agent.arguments = ["--parent-pid", String(ProcessInfo.processInfo.processIdentifier)]
+            try agent.run()
+        } catch {
+            NSLog("Could not start the Lumen wallpaper agent: %@", error.localizedDescription)
+        }
+    }
+
     func select(_ wallpaper: Wallpaper) {
         guard wallpapers.contains(where: { $0.id == wallpaper.id }) else { return }
         selected = wallpaper
@@ -346,7 +390,7 @@ final class WallpaperModel: NSObject, ObservableObject {
         syncDesktopWallpaper()
         if lockScreenVideoEnabled {
             if wallpaper.kind == .video, let url = wallpaper.url {
-                try? lockScreenVideoManager.configure(videoURL: url, title: wallpaper.title)
+                try? lockScreenVideoManager.configure(videoURL: url)
             } else {
                 try? lockScreenVideoManager.restorePreviousWallpaper()
                 lockScreenVideoEnabled = false
@@ -361,7 +405,7 @@ final class WallpaperModel: NSObject, ObservableObject {
         }
 
         do {
-            try lockScreenVideoManager.installAndConfigure(videoURL: url, title: selected.title)
+            try lockScreenVideoManager.installAndConfigure(videoURL: url)
             lockScreenVideoEnabled = true
         } catch {
             lockScreenVideoEnabled = LockScreenVideoManager.isInstalled

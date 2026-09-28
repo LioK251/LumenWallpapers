@@ -2,6 +2,14 @@
 
 All notable changes to Lumen are documented here.
 
+## [1.0.7] - 2026-09-28
+
+### Added
+
+- Wallpapers stay selected after Lumen quits. Images become the macOS desktop image, while videos and procedural scenes can continue animating through a background helper.
+- A Settings toggle controls whether live animation continues after quitting.
+- The macOS Video Wallpaper catalog keeps one reusable entry labeled Lumen when changing videos or enabling the feature again.
+
 ## [1.0.6] - 2026-09-28
 
 ### Fixed

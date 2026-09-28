@@ -4,6 +4,11 @@ import AppKit
 @MainActor
 final class LumenApplicationDelegate: NSObject, NSApplicationDelegate {
     var reopenMainWindow: (() -> Void)?
+    var handoffWallpaperOnQuit: (() -> Void)?
+
+    func applicationWillTerminate(_ notification: Notification) {
+        handoffWallpaperOnQuit?()
+    }
 
     func applicationShouldHandleReopen(
         _ sender: NSApplication,
@@ -60,6 +65,7 @@ private struct MainWindowRoot: View {
     var body: some View {
         DashboardView(model: model)
             .onAppear {
+                applicationDelegate.handoffWallpaperOnQuit = { model.handoffWallpaperOnQuit() }
                 applicationDelegate.reopenMainWindow = {
                     NSApp.unhide(nil)
                     openWindow(id: "main")

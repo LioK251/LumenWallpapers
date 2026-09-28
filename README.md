@@ -34,6 +34,7 @@ Lumen keeps your desktop calm and alive without subscriptions, accounts, or a cl
 - **Menu bar controls** for quick pause/resume, Settings, and app access.
 - **Video Wallpaper** registered in macOS **System Settings > Wallpaper**, for both the desktop and idle/lock screen.
 - **Offline-first by design**: imported media stays in `~/Library/Application Support/LumenWallpapers/Library`.
+- **Wallpaper persistence** after quitting: images stay as the macOS desktop image, while live scenes can keep animating in a background helper.
 
 ## Install
 
@@ -86,6 +87,8 @@ The **Discover** tab can browse Wallhaven images and, when a Pexels API key is c
 
 The Settings tab also includes battery-aware quality reduction, automatic pause for full-screen apps or sustained CPU load, Retina rendering, and launch-at-login. These preferences are stored locally. When the Mac or its displays sleep, Lumen pauses playback and hides its wallpaper windows while keeping the renderers available for a smooth resume after wake.
 
+When you quit Lumen, it saves the selected wallpaper as the macOS desktop image. For a playing video or procedural wallpaper, the **Keep Animating After Quit** setting also starts a small background helper so the scene keeps moving. Reopening Lumen stops the helper and returns rendering to the app. Turn the setting off if you prefer a still image after quitting. Enable **Launch at Login** if you also want Lumen to resume live wallpaper after signing in again.
+
 Only import media you created yourself or have permission to use. Good sources for openly licensed material include [Pexels](https://www.pexels.com/), [Pixabay](https://pixabay.com/), [Mixkit](https://mixkit.co/), [NASA media](https://images.nasa.gov/), and [Wikimedia Commons](https://commons.wikimedia.org/).
 
 ## Release signing
@@ -95,7 +98,7 @@ The repository includes [`scripts/build-release.sh`](scripts/build-release.sh), 
 ```sh
 export DEVELOPER_ID_APPLICATION="Developer ID Application: Your Name (TEAMID)"
 export KEYCHAIN_PROFILE="lumen-notary"
-./scripts/build-release.sh 1.0.6
+./scripts/build-release.sh 1.0.7
 ```
 
 Create the `notarytool` keychain profile once with `xcrun notarytool store-credentials`. The script signs with hardened runtime, submits the DMG for notarization, and staples the ticket. A notarized, Developer ID-signed DMG is what gives users the normal “open” experience without an unidentified-developer warning.

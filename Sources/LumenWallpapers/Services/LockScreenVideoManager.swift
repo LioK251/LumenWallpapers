@@ -30,14 +30,8 @@ final class LockScreenVideoManager {
         return containsSelectedAsset(assetID, in: root)
     }
 
-    var configuredVideoIsAvailable: Bool {
-        guard let assetID = Self.configuredAssetID else { return false }
-        return FileManager.default.isReadableFile(atPath: Self.videoURL(for: assetID).path)
-    }
-
     var hasStoredConfiguration: Bool {
-        UserDefaults.standard.string(forKey: Self.assetIDDefaultsKey) != nil
-            || UserDefaults.standard.string(forKey: Self.configuredVideoPathDefaultsKey) != nil
+        UserDefaults.standard.string(forKey: Self.configuredVideoPathDefaultsKey) != nil
     }
 
     func isConfigured(videoURL: URL) -> Bool {
@@ -45,21 +39,21 @@ final class LockScreenVideoManager {
             && Self.isInstalled
     }
 
-    func installAndConfigure(videoURL: URL, title: String) throws {
-        try configure(videoURL: videoURL, title: title)
+    func installAndConfigure(videoURL: URL) throws {
+        try configure(videoURL: videoURL)
         try selectInstalledAsset()
     }
 
     func configure(videoURL: URL) throws {
-        let title = videoURL.deletingPathExtension().lastPathComponent
-        try configure(videoURL: videoURL, title: title)
-    }
-
-    func configure(videoURL: URL, title: String) throws {
         guard FileManager.default.isReadableFile(atPath: videoURL.path) else {
             throw LockScreenVideoError.videoMissing
         }
-        if isConfigured(videoURL: videoURL) {
+        if isConfigured(videoURL: videoURL), let assetID = Self.configuredAssetID {
+            if !Self.hasCanonicalLumenAsset(assetID) {
+                try Self.registerAsset(assetID: assetID)
+                NSWorkspace.shared.noteFileSystemChanged(Self.aerialsURL.path)
+                Self.refreshWallpaperAgent()
+            }
             return
         }
 
@@ -67,7 +61,7 @@ final class LockScreenVideoManager {
         try Self.prepareAerialDirectories()
         try Self.installVideo(from: videoURL, assetID: assetID)
         try Self.installThumbnail(from: videoURL, assetID: assetID)
-        try Self.registerAsset(assetID: assetID, title: Self.sanitizedTitle(title))
+        try Self.registerAsset(assetID: assetID)
 
         UserDefaults.standard.set(assetID, forKey: Self.assetIDDefaultsKey)
         UserDefaults.standard.set(videoURL.path, forKey: Self.configuredVideoPathDefaultsKey)
@@ -141,7 +135,6 @@ final class LockScreenVideoManager {
         }
 
         UserDefaults.standard.removeObject(forKey: Self.configuredVideoPathDefaultsKey)
-        UserDefaults.standard.removeObject(forKey: Self.assetIDDefaultsKey)
         NSWorkspace.shared.noteFileSystemChanged(Self.aerialsURL.path)
         Self.refreshWallpaperAgent()
     }
@@ -259,7 +252,7 @@ final class LockScreenVideoManager {
         try fileManager.moveItem(at: staging, to: destination)
     }
 
-    private static func registerAsset(assetID: String, title: String) throws {
+    private static func registerAsset(assetID: String) throws {
         guard let data = try? Data(contentsOf: manifestURL),
               var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               var assets = root["assets"] as? [[String: Any]],
@@ -279,11 +272,11 @@ final class LockScreenVideoManager {
         let suffix = String(assetID.replacingOccurrences(of: "-", with: "").suffix(8))
         let previewURL = thumbnailURL(for: assetID).absoluteString
         assets.append([
-            "accessibilityLabel": title,
+            "accessibilityLabel": categoryName,
             "categories": [categoryID],
             "id": assetID,
             "includeInShuffle": false,
-            "localizedNameKey": title,
+            "localizedNameKey": categoryName,
             "pointsOfInterest": ["0": "\(shotIDPrefix)\(suffix)_0"],
             "preferredOrder": 0,
             "previewImage": previewURL,
@@ -349,6 +342,26 @@ final class LockScreenVideoManager {
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let assets = root["assets"] as? [[String: Any]] else { return false }
         return assets.contains { $0["id"] as? String == assetID }
+    }
+
+    private static func hasCanonicalLumenAsset(_ assetID: String) -> Bool {
+        guard let data = try? Data(contentsOf: manifestURL),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let assets = root["assets"] as? [[String: Any]],
+              let categories = root["categories"] as? [[String: Any]] else { return false }
+        let lumenAssets = assets.filter {
+            $0["id"] as? String == assetID
+                || ($0["shotID"] as? String)?.hasPrefix(shotIDPrefix) == true
+        }
+        let lumenCategories = categories.filter {
+            let id = $0["id"] as? String
+            return id == categoryID || id == subcategoryID
+        }
+        return lumenAssets.count == 1
+            && lumenCategories.count == 1
+            && lumenAssets[0]["id"] as? String == assetID
+            && lumenAssets[0]["localizedNameKey"] as? String == categoryName
+            && lumenAssets[0]["accessibilityLabel"] as? String == categoryName
     }
 
     private static func backUpWallpaperStoreIfNeeded() throws {
@@ -447,11 +460,6 @@ final class LockScreenVideoManager {
 
     private static func binaryPropertyList(_ value: Any) throws -> Data {
         try PropertyListSerialization.data(fromPropertyList: value, format: .binary, options: 0)
-    }
-
-    private static func sanitizedTitle(_ title: String) -> String {
-        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "Lumen Wallpaper" : trimmed
     }
 
     private static func refreshWallpaperAgent() {

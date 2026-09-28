@@ -3,6 +3,18 @@ import AppKit
 
 @MainActor
 final class DesktopWallpaperController {
+    static func targetScreens(for display: String) -> [NSScreen] {
+        let builtInScreen = NSScreen.screens.first(where: \.isBuiltIn)
+        return NSScreen.screens
+            .filter { screen in
+                display == "All Displays"
+                    || (display == "Built-in Display"
+                        ? screen == (builtInScreen ?? NSScreen.main)
+                        : builtInScreen.map { screen != $0 } ?? true)
+            }
+            .sorted { $0.persistenceKey < $1.persistenceKey }
+    }
+
     var onOcclusionChange: ((_ screenKey: String, _ isVisible: Bool) -> Void)?
 
     private var windows: [NSWindow] = []
@@ -20,15 +32,7 @@ final class DesktopWallpaperController {
         retinaRendering: Bool,
         isSuspended: Bool
     ) {
-        let builtInScreen = NSScreen.screens.first(where: \.isBuiltIn)
-        let screens = NSScreen.screens
-            .filter { screen in
-                display == "All Displays"
-                    || (display == "Built-in Display"
-                        ? screen == (builtInScreen ?? NSScreen.main)
-                        : builtInScreen.map { screen != $0 } ?? true)
-            }
-            .sorted { $0.persistenceKey < $1.persistenceKey }
+        let screens = Self.targetScreens(for: display)
         let targetScreenKeys = screens.map(\.persistenceKey)
         let structureChanged = activeWallpaper != wallpaper || activeTargetScreenKeys != targetScreenKeys
 

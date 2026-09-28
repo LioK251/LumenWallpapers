@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${1:-1.0.6}"
+VERSION="${1:-1.0.7}"
 if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)*([.-][0-9A-Za-z.-]+)?$ ]]; then
-  echo "Version must look like 1.0.6 or 1.0.6-beta.1" >&2
+  echo "Version must look like 1.0.7 or 1.0.7-beta.1" >&2
   exit 1
 fi
 
@@ -11,6 +11,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 RELEASE_DIR="$ROOT_DIR/.release/$VERSION"
 ARCHIVE_PATH="$RELEASE_DIR/LumenWallpapers.xcarchive"
 APP_PATH="$ARCHIVE_PATH/Products/Applications/Lumen.app"
+AGENT_PATH="$APP_PATH/Contents/Helpers/LumenWallpaperAgent"
 DMG_ROOT="$RELEASE_DIR/dmg-root"
 DMG_PATH="$ROOT_DIR/Lumen-${VERSION}.dmg"
 
@@ -28,23 +29,27 @@ xcodebuild \
   ARCHS='arm64 x86_64' \
   ONLY_ACTIVE_ARCH=NO \
   MARKETING_VERSION="$VERSION" \
-  CURRENT_PROJECT_VERSION=4 \
+  CURRENT_PROJECT_VERSION=5 \
   CODE_SIGNING_ALLOWED=NO \
   archive
 
 if [[ -n "${DEVELOPER_ID_APPLICATION:-}" ]]; then
   echo "Signing with ${DEVELOPER_ID_APPLICATION}..."
   codesign --force --options runtime --timestamp \
+    --sign "$DEVELOPER_ID_APPLICATION" "$AGENT_PATH"
+  codesign --force --options runtime --timestamp \
     --sign "$DEVELOPER_ID_APPLICATION" "$APP_PATH"
 else
   echo "No DEVELOPER_ID_APPLICATION set; applying an ad-hoc signature."
+  codesign --force --options runtime --sign - "$AGENT_PATH"
   codesign --force --options runtime --sign - "$APP_PATH"
 fi
 
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 ARCHITECTURES="$(lipo -archs "$APP_PATH/Contents/MacOS/Lumen")"
-if [[ "$ARCHITECTURES" != *arm64* || "$ARCHITECTURES" != *x86_64* ]]; then
-  echo "Expected a universal binary, found: $ARCHITECTURES" >&2
+AGENT_ARCHITECTURES="$(lipo -archs "$AGENT_PATH")"
+if [[ "$ARCHITECTURES" != *arm64* || "$ARCHITECTURES" != *x86_64* || "$AGENT_ARCHITECTURES" != *arm64* || "$AGENT_ARCHITECTURES" != *x86_64* ]]; then
+  echo "Expected universal binaries, found app: $ARCHITECTURES, agent: $AGENT_ARCHITECTURES" >&2
   exit 1
 fi
 
