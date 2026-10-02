@@ -51,7 +51,7 @@ struct DashboardView: View {
                 .frame(maxWidth: .infinity)
             }
         }
-        .alert("Import failed", isPresented: Binding(get: { model.importError != nil }, set: { if !$0 { model.importError = nil } })) { Button("OK") {} } message: { Text(model.importError ?? "") }
+        .alert("Lumen", isPresented: Binding(get: { model.importError != nil }, set: { if !$0 { model.importError = nil } })) { Button("OK") {} } message: { Text(model.importError ?? "") }
         .alert("Remove wallpaper?", isPresented: Binding(get: { removeTarget != nil }, set: { if !$0 { removeTarget = nil } })) {
             Button("Cancel", role: .cancel) { removeTarget = nil }
             Button("Remove", role: .destructive) {

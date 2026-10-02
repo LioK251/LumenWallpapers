@@ -127,6 +127,7 @@ struct LiveWallpaperCanvas: View {
     let wallpaper: Wallpaper
     let isPlaying: Bool
     let reducedQuality: Bool
+    var snapshotTime: TimeInterval? = nil
 
     private var frameInterval: Double {
         reducedQuality ? 1.0 / 15.0 : 1.0 / 24.0
@@ -143,7 +144,7 @@ struct LiveWallpaperCanvas: View {
             TimelineView(.animation(minimumInterval: isPlaying ? frameInterval : 3600, paused: !isPlaying)) { context in
                 Canvas { graphics, size in
                     let rect = CGRect(origin: .zero, size: size)
-                    let t = context.date.timeIntervalSinceReferenceDate
+                    let t = snapshotTime ?? context.date.timeIntervalSinceReferenceDate
                     for index in 0..<blobCount {
                         let x = size.width * (0.12 + CGFloat(index % 3) * 0.39) + sin(t * 0.2 + Double(index)) * (reducedQuality ? 48 : 90)
                         let y = size.height * (0.18 + CGFloat(index / 3) * 0.32) + cos(t * 0.16 + Double(index)) * (reducedQuality ? 28 : 52)
@@ -208,6 +209,12 @@ struct VideoSurface: NSViewRepresentable {
         view.playerLayer.videoGravity = videoGravity
         view.onReady = onReady
         context.coordinator.update(url: url, isPlaying: isPlaying, reducedQuality: reducedQuality)
+    }
+
+    static func dismantleNSView(_ view: PlayerContainerView, coordinator: Coordinator) {
+        coordinator.player.pause()
+        view.playerLayer.player = nil
+        view.onReady = nil
     }
 
     final class Coordinator {

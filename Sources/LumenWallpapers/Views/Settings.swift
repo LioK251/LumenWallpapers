@@ -125,6 +125,17 @@ struct SettingsView: View {
                 )
             }
 
+            SettingsSection(title: "About Lumen") {
+                HStack {
+                    Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Development")")
+                    Spacer()
+                    Link(destination: ReleaseUpdateChecker.repositoryURL) {
+                        Label("GitHub", systemImage: "arrow.up.right.square")
+                    }
+                }
+                .padding(.vertical, 16)
+            }
+
             HStack(spacing: 8) {
                 Image(systemName: "info.circle")
                 Text(model.isOnBattery ? "On battery" : "Connected to power")

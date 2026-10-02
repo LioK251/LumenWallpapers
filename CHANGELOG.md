@@ -2,6 +2,21 @@
 
 All notable changes to Lumen are documented here.
 
+## [1.0.8] - 2026-10-02
+
+### Fixed
+
+- Switching from live wallpaper to a static image no longer leaves an old live configuration for the background helper to resume after quitting.
+- Helper sessions reject stale launches and missing or corrupt settings, and retry handoff when the previous helper still owns the playback lock.
+- Persistent wallpaper images use content-specific paths to prevent macOS from reusing an older cached preview; the image name remains Lumen.
+- Restoring native wallpaper changes only sections still using Lumen and preserves unrelated desktop and screen saver changes. Cleanup failures are reported, and a failed wallpaper save cancels quitting.
+- Video views pause their player when removed.
+
+### Added
+
+- Automatic GitHub release checks with an update popup shown once per newer release, remembered across app launches.
+- A GitHub link and installed version in Settings.
+
 ## [1.0.7] - 2026-09-28
 
 ### Added

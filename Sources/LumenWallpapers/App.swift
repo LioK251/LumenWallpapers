@@ -4,10 +4,14 @@ import AppKit
 @MainActor
 final class LumenApplicationDelegate: NSObject, NSApplicationDelegate {
     var reopenMainWindow: (() -> Void)?
-    var handoffWallpaperOnQuit: (() -> Void)?
+    var handoffWallpaperOnQuit: (() -> Bool)?
 
-    func applicationWillTerminate(_ notification: Notification) {
-        handoffWallpaperOnQuit?()
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if handoffWallpaperOnQuit?() == false {
+            reopenMainWindow?()
+            return .terminateCancel
+        }
+        return .terminateNow
     }
 
     func applicationShouldHandleReopen(
@@ -59,11 +63,37 @@ struct LumenWallpapersApp: App {
 
 private struct MainWindowRoot: View {
     @ObservedObject var model: WallpaperModel
+    @StateObject private var updates = ReleaseUpdateChecker()
     let applicationDelegate: LumenApplicationDelegate
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         DashboardView(model: model)
+            .task { await updates.checkIfNeeded() }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                Task { await updates.checkIfNeeded() }
+            }
+            .sheet(item: $updates.availableRelease) { release in
+                VStack(alignment: .leading, spacing: 18) {
+                    Label("Lumen \(release.tag_name) is available", systemImage: "arrow.down.circle.fill")
+                        .font(.title2.weight(.semibold))
+                    Text("A new version is ready on GitHub. View the release notes and download the latest app.")
+                        .foregroundStyle(.secondary)
+                    HStack {
+                        Button("Dismiss") { updates.availableRelease = nil }
+                            .keyboardShortcut(.cancelAction)
+                        Spacer()
+                        Button("View Release") {
+                            NSWorkspace.shared.open(release.url)
+                            updates.availableRelease = nil
+                        }
+                        .keyboardShortcut(.defaultAction)
+                    }
+                }
+                .padding(28)
+                .frame(width: 430)
+                .onAppear { updates.markPresented(release) }
+            }
             .onAppear {
                 applicationDelegate.handoffWallpaperOnQuit = { model.handoffWallpaperOnQuit() }
                 applicationDelegate.reopenMainWindow = {

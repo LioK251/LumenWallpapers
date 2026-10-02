@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import AVFoundation
 import ImageIO
 import SwiftUI
@@ -7,7 +8,8 @@ import UniformTypeIdentifiers
 @MainActor
 enum PersistentWallpaperManager {
     static func apply(wallpaper: Wallpaper, display: String) throws {
-        if wallpaper.kind == .video, LockScreenVideoManager.isSelected { return }
+        if wallpaper.kind == .video, let url = wallpaper.url,
+           LockScreenVideoManager().isConfigured(videoURL: url), LockScreenVideoManager.isSelected { return }
         let imageURL = try imageURL(for: wallpaper, in: previewDirectory)
         NSWorkspace.shared.noteFileSystemChanged(imageURL.path)
         for screen in DesktopWallpaperController.targetScreens(for: display) {
@@ -23,7 +25,6 @@ enum PersistentWallpaperManager {
 
     static func imageURL(for wallpaper: Wallpaper, in directory: URL) throws -> URL {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let destination = directory.appendingPathComponent("Lumen.png")
 
         let image: CGImage
         if wallpaper.kind == .image {
@@ -48,7 +49,8 @@ enum PersistentWallpaperManager {
             let renderer = ImageRenderer(content: LiveWallpaperCanvas(
                 wallpaper: wallpaper,
                 isPlaying: false,
-                reducedQuality: false
+                reducedQuality: false,
+                snapshotTime: 0
             ).frame(width: size.width, height: size.height))
             renderer.proposedSize = ProposedViewSize(size)
             renderer.scale = 1
@@ -68,7 +70,14 @@ enum PersistentWallpaperManager {
         }
         CGImageDestinationAddImage(writer, image, nil)
         guard CGImageDestinationFinalize(writer) else { throw CocoaError(.fileWriteUnknown) }
-        try Data(contentsOf: staging).write(to: destination, options: .atomic)
+        let data = try Data(contentsOf: staging)
+        let revision = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        let revisionDirectory = directory.appendingPathComponent(revision, isDirectory: true)
+        try FileManager.default.createDirectory(at: revisionDirectory, withIntermediateDirectories: true)
+        let destination = revisionDirectory.appendingPathComponent("Lumen.png")
+        if !FileManager.default.fileExists(atPath: destination.path) {
+            try data.write(to: destination, options: .atomic)
+        }
         return destination
     }
 }

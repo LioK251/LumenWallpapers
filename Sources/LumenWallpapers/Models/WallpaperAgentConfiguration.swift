@@ -8,6 +8,11 @@ struct WallpaperAgentConfiguration: Codable, Equatable {
     let pauseOnFullscreen: Bool
     let pauseOnHighCPU: Bool
     let retinaRendering: Bool
+    var sessionID: String? = nil
+
+    var canAnimate: Bool {
+        sessionID != nil && isPlaying && wallpaper.kind != .image
+    }
 
     static var fileURL: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]

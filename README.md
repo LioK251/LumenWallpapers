@@ -35,6 +35,7 @@ Lumen keeps your desktop calm and alive without subscriptions, accounts, or a cl
 - **Video Wallpaper** registered in macOS **System Settings > Wallpaper**, for both the desktop and idle/lock screen.
 - **Offline-first by design**: imported media stays in `~/Library/Application Support/LumenWallpapers/Library`.
 - **Wallpaper persistence** after quitting: images stay as the macOS desktop image, while live scenes can keep animating in a background helper.
+- **Update notifications** from GitHub, shown once per newer stable release, plus a repository link in Settings.
 
 ## Install
 
@@ -98,7 +99,7 @@ The repository includes [`scripts/build-release.sh`](scripts/build-release.sh), 
 ```sh
 export DEVELOPER_ID_APPLICATION="Developer ID Application: Your Name (TEAMID)"
 export KEYCHAIN_PROFILE="lumen-notary"
-./scripts/build-release.sh 1.0.7
+./scripts/build-release.sh 1.0.8
 ```
 
 Create the `notarytool` keychain profile once with `xcrun notarytool store-credentials`. The script signs with hardened runtime, submits the DMG for notarization, and staples the ticket. A notarized, Developer ID-signed DMG is what gives users the normal “open” experience without an unidentified-developer warning.

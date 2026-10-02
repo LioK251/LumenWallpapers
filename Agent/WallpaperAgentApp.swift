@@ -21,6 +21,7 @@ struct LumenWallpaperAgent {
 final class WallpaperAgentDelegate: NSObject, NSApplicationDelegate {
     private let parentPID: pid_t
     private let configurationURL: URL
+    private let sessionID: String?
     private let controller = DesktopWallpaperController()
     private let sampler = SystemPerformanceSampler()
     private var configuration: WallpaperAgentConfiguration?
@@ -38,6 +39,11 @@ final class WallpaperAgentDelegate: NSObject, NSApplicationDelegate {
 
     override init() {
         let arguments = CommandLine.arguments
+        if let index = arguments.firstIndex(of: "--session"), arguments.indices.contains(index + 1) {
+            sessionID = arguments[index + 1]
+        } else {
+            sessionID = nil
+        }
         if let index = arguments.firstIndex(of: "--parent-pid"), arguments.indices.contains(index + 1) {
             parentPID = pid_t(arguments[index + 1]) ?? 0
         } else {
@@ -61,7 +67,7 @@ final class WallpaperAgentDelegate: NSObject, NSApplicationDelegate {
         let lockPath = configurationURL.deletingLastPathComponent()
             .appendingPathComponent("agent.lock").path
         lockDescriptor = open(lockPath, O_CREAT | O_RDWR, 0o600)
-        guard lockDescriptor >= 0, flock(lockDescriptor, LOCK_EX | LOCK_NB) == 0 else {
+        guard lockDescriptor >= 0 else {
             NSApp.terminate(nil)
             return
         }
@@ -118,16 +124,20 @@ final class WallpaperAgentDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func tick() {
+        guard let updated = try? WallpaperAgentConfiguration.load(from: configurationURL),
+              updated.canAnimate, updated.sessionID == sessionID else {
+            NSApp.terminate(nil)
+            return
+        }
+        let configurationChanged = updated != configuration
+        configuration = updated
         if parentPID > 0, kill(parentPID, 0) == 0 { return }
         if !NSRunningApplication.runningApplications(withBundleIdentifier: "com.lumen.wallpapers").isEmpty {
             NSApp.terminate(nil)
             return
         }
-        if let updated = try? WallpaperAgentConfiguration.load(from: configurationURL), updated != configuration {
-            configuration = updated
-            sync()
-        }
-        if !isActive {
+        guard flock(lockDescriptor, LOCK_EX | LOCK_NB) == 0 else { return }
+        if !isActive || configurationChanged {
             isActive = true
             sync()
         }
@@ -145,7 +155,9 @@ final class WallpaperAgentDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func sync() {
-        guard isActive, let configuration else { return }
+        guard isActive, let configuration,
+              let latest = try? WallpaperAgentConfiguration.load(from: configurationURL),
+              latest.canAnimate, latest.sessionID == sessionID else { return }
         controller.apply(
             wallpaper: configuration.wallpaper,
             isPlaying: configuration.isPlaying

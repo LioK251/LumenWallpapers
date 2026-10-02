@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${1:-1.0.7}"
+VERSION="${1:-1.0.8}"
 if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)*([.-][0-9A-Za-z.-]+)?$ ]]; then
-  echo "Version must look like 1.0.7 or 1.0.7-beta.1" >&2
+  echo "Version must look like 1.0.8 or 1.0.8-beta.1" >&2
   exit 1
 fi
 
@@ -29,7 +29,7 @@ xcodebuild \
   ARCHS='arm64 x86_64' \
   ONLY_ACTIVE_ARCH=NO \
   MARKETING_VERSION="$VERSION" \
-  CURRENT_PROJECT_VERSION=5 \
+  CURRENT_PROJECT_VERSION=6 \
   CODE_SIGNING_ALLOWED=NO \
   archive
 

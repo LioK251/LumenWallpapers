@@ -24,10 +24,11 @@ final class LockScreenVideoManager {
     }
 
     static var isSelected: Bool {
-        guard isInstalled else { return false }
-        guard let assetID = configuredAssetID,
-              let root = readPropertyList(at: wallpaperStoreURL) else { return false }
-        return containsSelectedAsset(assetID, in: root)
+        guard let assetID = configuredAssetID else { return false }
+        return wallpaperStoreURLs.contains { url in
+            guard let root = readPropertyList(at: url) else { return false }
+            return containsDesktopAsset(assetID, in: root)
+        }
     }
 
     var hasStoredConfiguration: Bool {
@@ -112,14 +113,16 @@ final class LockScreenVideoManager {
 
     func restorePreviousWallpaper() throws {
         let fileManager = FileManager.default
-        let shouldRestoreSelection = Self.isSelected
         for storeURL in Self.wallpaperStoreURLs {
             let backupURL = Self.previousStoreURL(for: storeURL)
-            if shouldRestoreSelection, fileManager.fileExists(atPath: backupURL.path) {
+            if let assetID = Self.configuredAssetID,
+               let current = Self.readPropertyList(at: storeURL),
+               Self.containsSelectedAsset(assetID, in: current) {
                 guard let previous = Self.readPropertyList(at: backupURL) else {
                     throw LockScreenVideoError.invalidBackup
                 }
-                try Self.writePropertyList(previous, to: storeURL)
+                let restored = try Self.restoringWallpaperSections(in: current, from: previous, assetID: assetID)
+                try Self.writePropertyList(restored, to: storeURL)
             }
             if fileManager.fileExists(atPath: backupURL.path) {
                 try fileManager.removeItem(at: backupURL)
@@ -425,6 +428,43 @@ final class LockScreenVideoManager {
             }
         }
         return value
+    }
+
+    static func restoringWallpaperSections(in value: Any, from backup: Any?, assetID: String) throws -> Any {
+        if let dictionary = value as? [String: Any] {
+            let previous = backup as? [String: Any]
+            var updated = dictionary
+            for (key, child) in dictionary {
+                if (key == "Desktop" || key == "Idle"), containsSelectedAsset(assetID, in: child) {
+                    guard let original = previous?[key], !containsSelectedAsset(assetID, in: original) else {
+                        throw LockScreenVideoError.invalidBackup
+                    }
+                    updated[key] = original
+                } else {
+                    updated[key] = try restoringWallpaperSections(in: child, from: previous?[key], assetID: assetID)
+                }
+            }
+            return updated
+        }
+        if let array = value as? [Any] {
+            let previous = backup as? [Any] ?? []
+            return try array.enumerated().map { index, child in
+                try restoringWallpaperSections(in: child, from: previous.indices.contains(index) ? previous[index] : nil, assetID: assetID)
+            }
+        }
+        return value
+    }
+
+    static func containsDesktopAsset(_ assetID: String, in value: Any) -> Bool {
+        if let dictionary = value as? [String: Any] {
+            return dictionary.contains { key, child in
+                key == "Desktop" ? containsSelectedAsset(assetID, in: child) : containsDesktopAsset(assetID, in: child)
+            }
+        }
+        if let array = value as? [Any] {
+            return array.contains { containsDesktopAsset(assetID, in: $0) }
+        }
+        return false
     }
 
     private static func containsSelectedAsset(_ assetID: String, in value: Any) -> Bool {

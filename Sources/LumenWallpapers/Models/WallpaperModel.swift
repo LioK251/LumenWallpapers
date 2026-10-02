@@ -137,6 +137,8 @@ final class WallpaperModel: NSObject, ObservableObject {
         let savedKey = UserDefaults.standard.string(forKey: Self.selectedWallpaperDefaultsKey)
         selected = availableWallpapers.first { $0.persistenceKey == savedKey } ?? availableWallpapers[0]
         super.init()
+        do { try agentConfiguration().save() }
+        catch { importError = "Could not reset background wallpaper: \(error.localizedDescription)" }
         launchAtLoginEnabled = LaunchAtLoginManager.isEnabled
         if lockScreenVideoManager.hasStoredConfiguration {
             if selected.kind == .video, let url = selected.url {
@@ -346,56 +348,78 @@ final class WallpaperModel: NSObject, ObservableObject {
         )
     }
 
-    func handoffWallpaperOnQuit() {
+    private func agentConfiguration(sessionID: String? = nil) -> WallpaperAgentConfiguration {
+        WallpaperAgentConfiguration(
+            wallpaper: selected,
+            display: selectedDisplay,
+            isPlaying: sessionID != nil && isPlaying,
+            reduceQualityOnBattery: reduceQualityOnBattery,
+            pauseOnFullscreen: pauseOnFullscreen,
+            pauseOnHighCPU: pauseOnHighCPU,
+            retinaRendering: retinaRendering,
+            sessionID: sessionID
+        )
+    }
+
+    func handoffWallpaperOnQuit() -> Bool {
         do {
+            try agentConfiguration().save()
+            if selected.kind != .video, lockScreenVideoManager.hasStoredConfiguration {
+                try lockScreenVideoManager.restorePreviousWallpaper()
+                lockScreenVideoEnabled = false
+            }
             try PersistentWallpaperManager.apply(wallpaper: selected, display: selectedDisplay)
         } catch {
-            NSLog("Could not persist the selected wallpaper: %@", error.localizedDescription)
+            importError = "Could not keep your wallpaper after quitting: \(error.localizedDescription)"
+            return false
         }
 
         guard keepAnimatingAfterQuit,
               isPlaying,
               selected.kind == .procedural || (selected.kind == .video && !LockScreenVideoManager.isSelected) else {
-            return
+            return true
         }
 
         do {
-            try WallpaperAgentConfiguration(
-                wallpaper: selected,
-                display: selectedDisplay,
-                isPlaying: isPlaying,
-                reduceQualityOnBattery: reduceQualityOnBattery,
-                pauseOnFullscreen: pauseOnFullscreen,
-                pauseOnHighCPU: pauseOnHighCPU,
-                retinaRendering: retinaRendering
-            ).save()
+            let sessionID = UUID().uuidString
             let agentURL = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/LumenWallpaperAgent")
             guard FileManager.default.isExecutableFile(atPath: agentURL.path) else {
                 NSLog("Lumen wallpaper agent is unavailable at %@", agentURL.path)
-                return
+                return true
             }
+            try agentConfiguration(sessionID: sessionID).save()
             let agent = Process()
             agent.executableURL = agentURL
-            agent.arguments = ["--parent-pid", String(ProcessInfo.processInfo.processIdentifier)]
+            agent.arguments = ["--parent-pid", String(ProcessInfo.processInfo.processIdentifier), "--session", sessionID]
             try agent.run()
         } catch {
-            NSLog("Could not start the Lumen wallpaper agent: %@", error.localizedDescription)
+            try? agentConfiguration().save()
+            importError = "Could not start the background wallpaper: \(error.localizedDescription)"
+            return false
         }
+        return true
     }
 
     func select(_ wallpaper: Wallpaper) {
         guard wallpapers.contains(where: { $0.id == wallpaper.id }) else { return }
+        do {
+            if lockScreenVideoEnabled || lockScreenVideoManager.hasStoredConfiguration {
+                if wallpaper.kind == .video, let url = wallpaper.url {
+                    try lockScreenVideoManager.configure(videoURL: url)
+                } else {
+                    try lockScreenVideoManager.restorePreviousWallpaper()
+                    lockScreenVideoEnabled = false
+                }
+            }
+        } catch {
+            importError = "Could not switch wallpaper: \(error.localizedDescription)"
+            return
+        }
         selected = wallpaper
         UserDefaults.standard.set(wallpaper.persistenceKey, forKey: Self.selectedWallpaperDefaultsKey)
         syncDesktopWallpaper()
-        if lockScreenVideoEnabled {
-            if wallpaper.kind == .video, let url = wallpaper.url {
-                try? lockScreenVideoManager.configure(videoURL: url)
-            } else {
-                try? lockScreenVideoManager.restorePreviousWallpaper()
-                lockScreenVideoEnabled = false
-            }
-        }
+        do { try agentConfiguration().save() }
+        catch { importError = "Could not update background wallpaper: \(error.localizedDescription)" }
     }
 
     func configureLockScreenVideo() {
