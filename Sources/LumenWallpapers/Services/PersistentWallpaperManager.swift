@@ -10,7 +10,14 @@ enum PersistentWallpaperManager {
     static func apply(wallpaper: Wallpaper, display: String) throws {
         if wallpaper.kind == .video, let url = wallpaper.url,
            LockScreenVideoManager().isConfigured(videoURL: url), LockScreenVideoManager.isSelected { return }
-        let imageURL = try imageURL(for: wallpaper, in: previewDirectory)
+        try apply(imageURL: prepare(wallpaper: wallpaper), display: display)
+    }
+
+    static func prepare(wallpaper: Wallpaper) throws -> URL {
+        try imageURL(for: wallpaper, in: previewDirectory)
+    }
+
+    static func apply(imageURL: URL, display: String) throws {
         NSWorkspace.shared.noteFileSystemChanged(imageURL.path)
         for screen in DesktopWallpaperController.targetScreens(for: display) {
             let options = NSWorkspace.shared.desktopImageOptions(for: screen) ?? [:]
@@ -30,7 +37,14 @@ enum PersistentWallpaperManager {
         if wallpaper.kind == .image {
             guard let url = wallpaper.url,
                   let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-                  let decodedImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+                  let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                  let width = properties[kCGImagePropertyPixelWidth] as? Int,
+                  let height = properties[kCGImagePropertyPixelHeight] as? Int,
+                  let decodedImage = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceCreateThumbnailWithTransform: true,
+                    kCGImageSourceThumbnailMaxPixelSize: max(width, height)
+                  ] as CFDictionary) else {
                 throw CocoaError(.fileReadCorruptFile)
             }
             image = decodedImage

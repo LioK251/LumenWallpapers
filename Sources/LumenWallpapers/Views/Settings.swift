@@ -107,7 +107,7 @@ struct SettingsView: View {
                 )
                 SettingsToggleRow(
                     title: "Video Wallpaper",
-                    description: "Install the selected video in macOS Wallpaper for Desktop and Lock Screen.",
+                    description: "Use selected videos on the desktop and lock screen. This stays enabled when you choose an image.",
                     symbol: "rectangle.on.rectangle",
                     isOn: Binding(
                         get: { model.lockScreenVideoEnabled },

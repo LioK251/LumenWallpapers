@@ -2,6 +2,17 @@
 
 All notable changes to Lumen are documented here.
 
+## [1.0.8.1] - 2026-10-02
+
+### Fixed
+
+- Apply the selected macOS wallpaper immediately, on startup, and after display changes, so locking before quitting no longer reveals the previous static wallpaper.
+- Select both Desktop and Idle when changing videos, and keep the Video Wallpaper preference through image selections. Native video wallpaper is enabled by default; an explicit opt-out is saved.
+- Restore native files and preferences if installing or selecting a video fails.
+- Restore newly created Spaces using the saved system default when no original per-Space backup exists.
+- Switch to a valid fallback before deleting the active wallpaper.
+- Preserve image orientation in saved wallpaper previews, stabilize display targeting on Macs without a built-in screen, and pause retained players when displays disconnect during sleep.
+
 ## [1.0.8] - 2026-10-02
 
 ### Fixed

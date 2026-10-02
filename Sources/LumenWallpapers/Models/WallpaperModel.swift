@@ -12,6 +12,7 @@ final class WallpaperModel: NSObject, ObservableObject {
     private static let pauseOnHighCPUDefaultsKey = "pauseOnHighCPU"
     private static let retinaRenderingDefaultsKey = "retinaRendering"
     private static let keepAnimatingAfterQuitDefaultsKey = "keepAnimatingAfterQuit"
+    private static let lockScreenVideoEnabledDefaultsKey = "lockScreenVideoEnabled"
     private static let pexelsAPIKeyDefaultsKey = "pexelsAPIKey"
     private static let wallhavenAPIKeyDefaultsKey = "wallhavenAPIKey"
     private static let allowNSFWSearchDefaultsKey = "allowNSFWSearch"
@@ -27,6 +28,7 @@ final class WallpaperModel: NSObject, ObservableObject {
         didSet {
             UserDefaults.standard.set(selectedDisplay, forKey: Self.selectedDisplayDefaultsKey)
             syncDesktopWallpaper()
+            updateSystemWallpaper()
         }
     }
     @Published var activeTab = "Home" {
@@ -40,7 +42,7 @@ final class WallpaperModel: NSObject, ObservableObject {
     @Published private(set) var wallpapers: [Wallpaper]
     @Published var importError: String?
     @Published var launchAtLoginEnabled = false
-    @Published private(set) var lockScreenVideoEnabled = LockScreenVideoManager.isInstalled
+    @Published private(set) var lockScreenVideoEnabled: Bool
     @Published var reduceQualityOnBattery: Bool {
         didSet {
             UserDefaults.standard.set(reduceQualityOnBattery, forKey: Self.reduceQualityOnBatteryDefaultsKey)
@@ -116,6 +118,7 @@ final class WallpaperModel: NSObject, ObservableObject {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         libraryURL = base.appendingPathComponent("LumenWallpapers/Library", isDirectory: true)
         lockScreenVideoManager = LockScreenVideoManager()
+        lockScreenVideoEnabled = Self.storedBool(forKey: Self.lockScreenVideoEnabledDefaultsKey, defaultValue: true)
         wallpapers = []
         isPlaying = Self.storedBool(forKey: Self.isPlayingDefaultsKey, defaultValue: true)
         selectedDisplay = UserDefaults.standard.string(forKey: Self.selectedDisplayDefaultsKey) ?? "Built-in Display"
@@ -140,14 +143,6 @@ final class WallpaperModel: NSObject, ObservableObject {
         do { try agentConfiguration().save() }
         catch { importError = "Could not reset background wallpaper: \(error.localizedDescription)" }
         launchAtLoginEnabled = LaunchAtLoginManager.isEnabled
-        if lockScreenVideoManager.hasStoredConfiguration {
-            if selected.kind == .video, let url = selected.url {
-                try? lockScreenVideoManager.configure(videoURL: url)
-            } else {
-                try? lockScreenVideoManager.restorePreviousWallpaper()
-            }
-            lockScreenVideoEnabled = LockScreenVideoManager.isInstalled
-        }
         startSystemMonitoring()
     }
 
@@ -316,9 +311,28 @@ final class WallpaperModel: NSObject, ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.syncDesktopWallpaper()
+                self?.updateSystemWallpaper()
             }
         }
         syncDesktopWallpaper()
+        updateSystemWallpaper()
+    }
+
+    private func synchronizeSystemWallpaper(_ wallpaper: Wallpaper) throws {
+        if lockScreenVideoEnabled, wallpaper.kind == .video, let url = wallpaper.url {
+            try lockScreenVideoManager.installAndConfigure(videoURL: url)
+        } else {
+            let imageURL = try PersistentWallpaperManager.prepare(wallpaper: wallpaper)
+            if lockScreenVideoManager.hasStoredConfiguration {
+                try lockScreenVideoManager.restorePreviousWallpaper()
+            }
+            try PersistentWallpaperManager.apply(imageURL: imageURL, display: selectedDisplay)
+        }
+    }
+
+    private func updateSystemWallpaper() {
+        do { try synchronizeSystemWallpaper(selected) }
+        catch { importError = "Could not update the macOS wallpaper: \(error.localizedDescription)" }
     }
 
     private func updateWallpaperOcclusion(screenKey: String, isVisible: Bool) {
@@ -364,11 +378,7 @@ final class WallpaperModel: NSObject, ObservableObject {
     func handoffWallpaperOnQuit() -> Bool {
         do {
             try agentConfiguration().save()
-            if selected.kind != .video, lockScreenVideoManager.hasStoredConfiguration {
-                try lockScreenVideoManager.restorePreviousWallpaper()
-                lockScreenVideoEnabled = false
-            }
-            try PersistentWallpaperManager.apply(wallpaper: selected, display: selectedDisplay)
+            try synchronizeSystemWallpaper(selected)
         } catch {
             importError = "Could not keep your wallpaper after quitting: \(error.localizedDescription)"
             return false
@@ -400,26 +410,21 @@ final class WallpaperModel: NSObject, ObservableObject {
         return true
     }
 
-    func select(_ wallpaper: Wallpaper) {
-        guard wallpapers.contains(where: { $0.id == wallpaper.id }) else { return }
+    @discardableResult
+    func select(_ wallpaper: Wallpaper) -> Bool {
+        guard wallpapers.contains(where: { $0.id == wallpaper.id }) else { return false }
         do {
-            if lockScreenVideoEnabled || lockScreenVideoManager.hasStoredConfiguration {
-                if wallpaper.kind == .video, let url = wallpaper.url {
-                    try lockScreenVideoManager.configure(videoURL: url)
-                } else {
-                    try lockScreenVideoManager.restorePreviousWallpaper()
-                    lockScreenVideoEnabled = false
-                }
-            }
+            try synchronizeSystemWallpaper(wallpaper)
         } catch {
             importError = "Could not switch wallpaper: \(error.localizedDescription)"
-            return
+            return false
         }
         selected = wallpaper
         UserDefaults.standard.set(wallpaper.persistenceKey, forKey: Self.selectedWallpaperDefaultsKey)
         syncDesktopWallpaper()
         do { try agentConfiguration().save() }
         catch { importError = "Could not update background wallpaper: \(error.localizedDescription)" }
+        return true
     }
 
     func configureLockScreenVideo() {
@@ -431,21 +436,31 @@ final class WallpaperModel: NSObject, ObservableObject {
         do {
             try lockScreenVideoManager.installAndConfigure(videoURL: url)
             lockScreenVideoEnabled = true
+            UserDefaults.standard.set(true, forKey: Self.lockScreenVideoEnabledDefaultsKey)
         } catch {
-            lockScreenVideoEnabled = LockScreenVideoManager.isInstalled
             importError = "Could not set up Video Wallpaper: \(error.localizedDescription)"
         }
     }
 
     func setLockScreenVideo(_ enabled: Bool) {
         if enabled {
-            configureLockScreenVideo()
+            if selected.kind == .video {
+                configureLockScreenVideo()
+            } else {
+                lockScreenVideoEnabled = true
+                UserDefaults.standard.set(true, forKey: Self.lockScreenVideoEnabledDefaultsKey)
+            }
             return
         }
 
         do {
-            try lockScreenVideoManager.restorePreviousWallpaper()
+            let imageURL = try PersistentWallpaperManager.prepare(wallpaper: selected)
+            if lockScreenVideoManager.hasStoredConfiguration {
+                try lockScreenVideoManager.restorePreviousWallpaper()
+            }
+            try PersistentWallpaperManager.apply(imageURL: imageURL, display: selectedDisplay)
             lockScreenVideoEnabled = false
+            UserDefaults.standard.set(false, forKey: Self.lockScreenVideoEnabledDefaultsKey)
         } catch {
             importError = "Could not restore the previous wallpaper: \(error.localizedDescription)"
         }
@@ -629,6 +644,9 @@ final class WallpaperModel: NSObject, ObservableObject {
         guard wallpaper.kind != .procedural,
               wallpapers.contains(where: { $0.id == wallpaper.id }) else { return }
         let remaining = wallpapers.filter { $0.id != wallpaper.id }
+        if selected.id == wallpaper.id, let fallback = remaining.first {
+            guard select(fallback) else { return }
+        }
         do {
             try persistImported(remaining)
         } catch {
@@ -637,9 +655,8 @@ final class WallpaperModel: NSObject, ObservableObject {
         }
         if let url = wallpaper.url {
             do {
-                if lockScreenVideoEnabled, lockScreenVideoManager.isConfigured(videoURL: url) {
+                if lockScreenVideoManager.isConfigured(videoURL: url) {
                     try lockScreenVideoManager.restorePreviousWallpaper()
-                    lockScreenVideoEnabled = false
                 }
                 if FileManager.default.fileExists(atPath: url.path) {
                     try FileManager.default.removeItem(at: url)

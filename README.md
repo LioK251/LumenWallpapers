@@ -82,7 +82,7 @@ Click `+` in the top bar or **Import media** in the preview. Lumen copies select
 
 For smooth loops, use a 16:9 or 16:10 clip at 1080p or 4K, around 10–30 seconds long, with matching first and last frames. Wallpaper audio is muted by design.
 
-Select an imported video and turn on **Video Wallpaper** in the **Settings** tab. Lumen adds a copy of the video and a generated preview to macOS's Aerials catalog, where it appears under the **Lumen** category in **System Settings > Wallpaper**. It selects the same asset for Desktop and Idle, which is the wallpaper macOS uses behind the lock-screen interface. Turn the option off to remove Lumen's catalog entry and restore the previous wallpaper selection.
+Selecting a wallpaper updates macOS immediately, so locking the Mac before quitting uses the current selection. **Video Wallpaper** is enabled by default: imported videos use the native Desktop and Idle selection, with one reusable **Lumen** catalog entry. This preference stays enabled when you choose an image, so the next video animates on the lock screen again. Turn it off in Settings to use a still frame of the selected video as the system wallpaper. Procedural scenes use a still preview on the lock screen.
 
 The **Discover** tab can browse Wallhaven images and, when a Pexels API key is configured, Pexels videos. Downloading a card adds it to **My Library**, immediately applies it as the wallpaper, and leaves the card clickable for switching back to it later. Hover over a downloaded card to remove it from the library. The Home recommendations row is populated from shuffled API results when they are available.
 
@@ -99,7 +99,7 @@ The repository includes [`scripts/build-release.sh`](scripts/build-release.sh), 
 ```sh
 export DEVELOPER_ID_APPLICATION="Developer ID Application: Your Name (TEAMID)"
 export KEYCHAIN_PROFILE="lumen-notary"
-./scripts/build-release.sh 1.0.8
+./scripts/build-release.sh 1.0.8.1
 ```
 
 Create the `notarytool` keychain profile once with `xcrun notarytool store-credentials`. The script signs with hardened runtime, submits the DMG for notarization, and staples the ticket. A notarized, Developer ID-signed DMG is what gives users the normal “open” experience without an unidentified-developer warning.

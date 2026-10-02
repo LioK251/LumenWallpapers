@@ -9,7 +9,7 @@ final class DesktopWallpaperController {
             .filter { screen in
                 display == "All Displays"
                     || (display == "Built-in Display"
-                        ? screen == (builtInScreen ?? NSScreen.main)
+                        ? screen == (builtInScreen ?? NSScreen.screens.first)
                         : builtInScreen.map { screen != $0 } ?? true)
             }
             .sorted { $0.persistenceKey < $1.persistenceKey }
@@ -38,7 +38,11 @@ final class DesktopWallpaperController {
 
         // Sleep keeps the window and player objects alive; wake-up only changes visibility.
         if isSuspended {
-            for (index, screen) in screens.enumerated() where index < hostViews.count {
+            for index in hostViews.indices {
+                guard let screen = windows[index].screen ?? screens.first ?? NSScreen.screens.first else {
+                    hostViews[index].rootView = AnyView(EmptyView())
+                    continue
+                }
                 updateWindow(
                     at: index,
                     screen: screen,
