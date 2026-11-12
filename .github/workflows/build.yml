@@ -11,7 +11,7 @@ permissions:
 jobs:
   swift-package:
     name: Swift package build
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - name: Select Xcode
@@ -23,7 +23,7 @@ jobs:
 
   xcode-project:
     name: Xcode project build
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - name: Select Xcode
