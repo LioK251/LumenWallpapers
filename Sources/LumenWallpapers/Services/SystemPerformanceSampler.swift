@@ -54,12 +54,11 @@ actor SystemPerformanceSampler {
             return nil
         }
         self.previousCPUTicks = ticks
-        let deltas = zip(ticks, previousCPUTicks).map { current, previous in
-            current >= previous
-                ? UInt64(current - previous)
-                : UInt64(UInt32.max - previous) + 1 + UInt64(current)
+        let deltas: [UInt64] = zip(ticks, previousCPUTicks).map { current, previous in
+            if current >= previous { return UInt64(current - previous) }
+            return UInt64(UInt32.max - previous) + 1 + UInt64(current)
         }
-        let total = deltas.reduce(0, +)
+        let total: UInt64 = deltas.reduce(0, +)
         guard total > 0, deltas.count > Int(CPU_STATE_IDLE) else { return nil }
         let idle = deltas[Int(CPU_STATE_IDLE)]
         return Double(total - idle) / Double(total) * 100

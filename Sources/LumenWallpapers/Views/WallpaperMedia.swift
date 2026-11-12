@@ -31,7 +31,7 @@ final class VideoPosterCache {
         cache.totalCostLimit = 96 * 1024 * 1024
         return cache
     }()
-    private var requests: [URL: Task<NSImage?, Never>] = [:]
+    private var requests: [URL: Task<Void, Never>] = [:]
 
     static func posterURL(for url: URL, in directory: URL) -> URL {
         let values = try? FileManager.default.attributesOfItem(atPath: url.path)
@@ -65,30 +65,38 @@ final class VideoPosterCache {
 
     func image(for url: URL) async -> NSImage? {
         if let image = cachedImage(for: url) { return image }
-        if let task = requests[url] { return await task.value }
+        if let task = requests[url] {
+            await task.value
+            return cachedImage(for: url)
+        }
 
-        let task = Task<NSImage?, Never> {
+        let task = Task<Void, Never> { @MainActor in
+            defer { requests[url] = nil }
             let request = QLThumbnailGenerator.Request(
                 fileAt: url,
                 size: CGSize(width: 440, height: 264),
                 scale: 1,
                 representationTypes: .thumbnail
             )
-            return try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request).nsImage
-        }
-        requests[url] = task
-        let image = await task.value
-        requests[url] = nil
-        if let image {
+            let png: Data? = await withCheckedContinuation { continuation in
+                QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { thumbnail, _ in
+                    guard let cgImage = thumbnail?.cgImage else {
+                        continuation.resume(returning: nil)
+                        return
+                    }
+                    let bitmap = NSBitmapImageRep(cgImage: cgImage)
+                    continuation.resume(returning: bitmap.representation(using: .png, properties: [:]))
+                }
+            }
+            guard let png, let image = NSImage(data: png) else { return }
             let cost = Int(image.size.width * image.size.height * 4)
             cache.setObject(image, forKey: url as NSURL, cost: cost)
-            if let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff),
-               let png = bitmap.representation(using: .png, properties: [:]) {
-                try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                try? png.write(to: Self.posterURL(for: url, in: directory), options: .atomic)
-            }
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try? png.write(to: Self.posterURL(for: url, in: directory), options: .atomic)
         }
-        return image
+        requests[url] = task
+        await task.value
+        return cachedImage(for: url)
     }
 }
 
