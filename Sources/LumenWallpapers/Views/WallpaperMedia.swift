@@ -3,6 +3,7 @@ import AppKit
 import AVKit
 import AVFoundation
 import QuickLookThumbnailing
+import CryptoKit
 
 @MainActor
 enum WallpaperImageCache {
@@ -32,8 +33,38 @@ final class VideoPosterCache {
     }()
     private var requests: [URL: Task<NSImage?, Never>] = [:]
 
-    func image(for url: URL) async -> NSImage? {
+    static func posterURL(for url: URL, in directory: URL) -> URL {
+        let values = try? FileManager.default.attributesOfItem(atPath: url.path)
+        let revision = "\(url.path)|\(values?[.size] as? Int ?? 0)|\((values?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)"
+        let name = SHA256.hash(data: Data(revision.utf8)).map { String(format: "%02x", $0) }.joined()
+        return directory.appendingPathComponent(name).appendingPathExtension("png")
+    }
+
+    private var directory: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("LumenWallpapers/VideoPosters", isDirectory: true)
+    }
+
+    func cachedImage(for url: URL) -> NSImage? {
         if let image = cache.object(forKey: url as NSURL) { return image }
+        let preferences = UserDefaults(suiteName: "com.lumen.wallpapers")
+        var image: NSImage?
+        if preferences?.string(forKey: "lockScreenVideoSourcePath") == url.path,
+           let assetID = preferences?.string(forKey: "lockScreenVideoAerialAssetID"), UUID(uuidString: assetID) != nil {
+            let nativePoster = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("com.apple.wallpaper/aerials/thumbnails/\(assetID).png")
+            image = NSImage(contentsOf: nativePoster)
+        }
+        image = image ?? NSImage(contentsOf: Self.posterURL(for: url, in: directory))
+        if let image {
+            let cost = Int(image.size.width * image.size.height * 4)
+            cache.setObject(image, forKey: url as NSURL, cost: cost)
+        }
+        return image
+    }
+
+    func image(for url: URL) async -> NSImage? {
+        if let image = cachedImage(for: url) { return image }
         if let task = requests[url] { return await task.value }
 
         let task = Task<NSImage?, Never> {
@@ -51,6 +82,11 @@ final class VideoPosterCache {
         if let image {
             let cost = Int(image.size.width * image.size.height * 4)
             cache.setObject(image, forKey: url as NSURL, cost: cost)
+            if let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff),
+               let png = bitmap.representation(using: .png, properties: [:]) {
+                try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                try? png.write(to: Self.posterURL(for: url, in: directory), options: .atomic)
+            }
         }
         return image
     }
@@ -60,6 +96,11 @@ struct VideoPosterView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let url: URL
     @State private var image: NSImage?
+
+    init(url: URL) {
+        self.url = url
+        _image = State(initialValue: VideoPosterCache.shared.cachedImage(for: url))
+    }
 
     var body: some View {
         Group {
@@ -74,7 +115,7 @@ struct VideoPosterView: View {
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: image != nil)
         .task(id: url) {
-            image = nil
+            image = VideoPosterCache.shared.cachedImage(for: url)
             let poster = await VideoPosterCache.shared.image(for: url)
             guard !Task.isCancelled else { return }
             image = poster
@@ -92,7 +133,7 @@ struct WallpaperMediaView: View {
             if wallpaper.kind == .procedural {
                 LiveWallpaperCanvas(wallpaper: wallpaper, isPlaying: isPlaying, reducedQuality: reducedQuality)
             } else if wallpaper.kind == .video, let url = wallpaper.url {
-                VideoSurface(url: url, isPlaying: isPlaying, reducedQuality: reducedQuality)
+                VideoWallpaperView(url: url, isPlaying: isPlaying, reducedQuality: reducedQuality)
             } else if let url = wallpaper.url {
                 Image(nsImage: WallpaperImageCache.image(for: url) ?? NSImage())
                     .resizable()
@@ -185,6 +226,24 @@ private struct StaticWallpaperBackground: View {
     }
 }
 
+struct VideoWallpaperView: View {
+    let url: URL
+    let isPlaying: Bool
+    let reducedQuality: Bool
+    var onReady: (() -> Void)? = nil
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack {
+                VideoPosterView(url: url)
+                VideoSurface(url: url, isPlaying: isPlaying, reducedQuality: reducedQuality, onReady: onReady)
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+            .clipped()
+        }
+    }
+}
+
 struct VideoSurface: NSViewRepresentable {
     @Environment(\.displayScale) private var displayScale
     let url: URL
@@ -233,12 +292,16 @@ struct VideoSurface: NSViewRepresentable {
         }
 
         func update(url: URL, isPlaying: Bool, reducedQuality: Bool) {
-            if url != currentURL || reducedQuality != self.reducedQuality {
+            if url != currentURL {
                 looper = nil
                 player.removeAllItems()
                 currentURL = url
                 self.reducedQuality = reducedQuality
                 looper = makeLooper(for: url)
+            }
+            if reducedQuality != self.reducedQuality {
+                self.reducedQuality = reducedQuality
+                for item in looper?.loopingPlayerItems ?? [] { configureQuality(item) }
             }
             setPlaying(isPlaying)
         }
@@ -247,11 +310,13 @@ struct VideoSurface: NSViewRepresentable {
 
         private func makeLooper(for url: URL) -> AVPlayerLooper {
             let item = AVPlayerItem(url: url)
-            if reducedQuality {
-                item.preferredPeakBitRate = 2_000_000
-                item.preferredMaximumResolution = CGSize(width: 1280, height: 720)
-            }
+            configureQuality(item)
             return AVPlayerLooper(player: player, templateItem: item)
+        }
+
+        private func configureQuality(_ item: AVPlayerItem) {
+            item.preferredPeakBitRate = reducedQuality ? 2_000_000 : 0
+            item.preferredMaximumResolution = reducedQuality ? CGSize(width: 1280, height: 720) : .zero
         }
     }
 }

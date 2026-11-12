@@ -1,22 +1,40 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${1:-1.0.8.1}"
+VERSION="${1:-0.1.9}"
 if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)*([.-][0-9A-Za-z.-]+)?$ ]]; then
-  echo "Version must look like 1.0.8.1 or 1.0.8.1-beta.1" >&2
+  echo "Version must look like 0.1.9 or 0.1.9-beta.1" >&2
+  exit 1
+fi
+if [[ -n "${KEYCHAIN_PROFILE:-}" && -z "${DEVELOPER_ID_APPLICATION:-}" ]]; then
+  echo "KEYCHAIN_PROFILE requires DEVELOPER_ID_APPLICATION." >&2
   exit 1
 fi
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-RELEASE_DIR="$ROOT_DIR/.release/$VERSION"
-ARCHIVE_PATH="$RELEASE_DIR/LumenWallpapers.xcarchive"
+RELEASE_DIR="$ROOT_DIR/build/releases/$VERSION"
+mkdir -p "$(dirname "$RELEASE_DIR")"
+STAGING_DIR="$(mktemp -d "$ROOT_DIR/build/.release-${VERSION}.XXXXXX")"
+ARCHIVE_PATH="$STAGING_DIR/LumenWallpapers.xcarchive"
 APP_PATH="$ARCHIVE_PATH/Products/Applications/Lumen.app"
 AGENT_PATH="$APP_PATH/Contents/Helpers/LumenWallpaperAgent"
-DMG_ROOT="$RELEASE_DIR/dmg-root"
-DMG_PATH="$ROOT_DIR/Lumen-${VERSION}.dmg"
+DMG_ROOT="$STAGING_DIR/dmg-root"
+OUTPUT_DIR="$STAGING_DIR/release"
+DMG_PATH="$OUTPUT_DIR/Lumen-${VERSION}.dmg"
 
-rm -rf "$RELEASE_DIR" "$DMG_PATH"
-mkdir -p "$RELEASE_DIR" "$DMG_ROOT"
+finish() {
+  status=$?
+  if (( status == 0 )); then
+    rm -rf "$STAGING_DIR"
+  else
+    if [[ -d "$STAGING_DIR/previous-release" && ! -e "$RELEASE_DIR" ]]; then
+      mv "$STAGING_DIR/previous-release" "$RELEASE_DIR"
+    fi
+    echo "Build failed; diagnostics retained at $STAGING_DIR" >&2
+  fi
+}
+trap finish EXIT
+mkdir -p "$OUTPUT_DIR" "$DMG_ROOT"
 
 echo "Building Lumen ${VERSION} (arm64 + x86_64)..."
 xcodebuild \
@@ -25,13 +43,13 @@ xcodebuild \
   -configuration Release \
   -destination 'generic/platform=macOS' \
   -archivePath "$ARCHIVE_PATH" \
-  -derivedDataPath "$RELEASE_DIR/DerivedData" \
+  -derivedDataPath "$STAGING_DIR/DerivedData" \
   ARCHS='arm64 x86_64' \
   ONLY_ACTIVE_ARCH=NO \
   MARKETING_VERSION="$VERSION" \
-  CURRENT_PROJECT_VERSION=7 \
+  CURRENT_PROJECT_VERSION=8 \
   CODE_SIGNING_ALLOWED=NO \
-  archive
+  archive 2>&1 | tee "$STAGING_DIR/build.log"
 
 if [[ -n "${DEVELOPER_ID_APPLICATION:-}" ]]; then
   echo "Signing with ${DEVELOPER_ID_APPLICATION}..."
@@ -53,6 +71,16 @@ if [[ "$ARCHITECTURES" != *arm64* || "$ARCHITECTURES" != *x86_64* || "$AGENT_ARC
   exit 1
 fi
 
+BUILT_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Contents/Info.plist")"
+BUILT_NUMBER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Contents/Info.plist")"
+if [[ "$BUILT_VERSION" != "$VERSION" || "$BUILT_NUMBER" != 8 ]]; then
+  echo "Unexpected app version: $BUILT_VERSION ($BUILT_NUMBER)" >&2
+  exit 1
+fi
+
+mv "$APP_PATH" "$OUTPUT_DIR/Lumen.app"
+APP_PATH="$OUTPUT_DIR/Lumen.app"
+
 ditto "$APP_PATH" "$DMG_ROOT/Lumen.app"
 ln -s /Applications "$DMG_ROOT/Applications"
 
@@ -71,10 +99,6 @@ if [[ -n "${DEVELOPER_ID_APPLICATION:-}" ]]; then
 fi
 
 if [[ -n "${KEYCHAIN_PROFILE:-}" ]]; then
-  if [[ -z "${DEVELOPER_ID_APPLICATION:-}" ]]; then
-    echo "KEYCHAIN_PROFILE requires DEVELOPER_ID_APPLICATION." >&2
-    exit 1
-  fi
   echo "Submitting DMG for notarization..."
   xcrun notarytool submit "$DMG_PATH" \
     --keychain-profile "$KEYCHAIN_PROFILE" \
@@ -85,4 +109,10 @@ else
   echo "No KEYCHAIN_PROFILE set; skipping notarization."
 fi
 
-echo "Release artifact: $DMG_PATH"
+hdiutil verify "$DMG_PATH"
+if [[ -e "$RELEASE_DIR" ]]; then
+  mv "$RELEASE_DIR" "$STAGING_DIR/previous-release"
+fi
+mv "$OUTPUT_DIR" "$RELEASE_DIR"
+echo "Release app: $RELEASE_DIR/Lumen.app"
+echo "Release installer: $RELEASE_DIR/Lumen-${VERSION}.dmg"

@@ -220,11 +220,22 @@ final class WallhavenBrowseModel: ObservableObject {
     private var searchTask: Task<Void, Never>?
     private var searchID = UUID()
     private var hasSearchedOnce = false
+    private let search: (String, Int, Bool, String) async throws -> (items: [WallhavenWallpaper], currentPage: Int, lastPage: Int)
+
+    init(search: @escaping (String, Int, Bool, String) async throws -> (items: [WallhavenWallpaper], currentPage: Int, lastPage: Int) = {
+        try await WallhavenAPI.search(query: $0, page: $1, includeNSFW: $2, apiKey: $3)
+    }) {
+        self.search = search
+    }
 
     func runSearch(includeNSFW: Bool = false, apiKey: String = "") {
         searchTask?.cancel()
         searchID = UUID()
         hasSearchedOnce = true
+        results = []
+        currentPage = 1
+        lastPage = 1
+        errorMessage = nil
         let q = query
         let id = searchID
         isLoading = true
@@ -250,7 +261,7 @@ final class WallhavenBrowseModel: ObservableObject {
         isLoading = true
         errorMessage = nil
         do {
-            let (items, current, last) = try await WallhavenAPI.search(query: query, page: page, includeNSFW: includeNSFW, apiKey: apiKey)
+            let (items, current, last) = try await search(query, page, includeNSFW, apiKey)
             guard !Task.isCancelled, searchID == self.searchID else { return }
             currentPage = current
             lastPage = last

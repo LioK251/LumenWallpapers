@@ -111,7 +111,7 @@ struct SettingsView: View {
                     symbol: "rectangle.on.rectangle",
                     isOn: Binding(
                         get: { model.lockScreenVideoEnabled },
-                        set: { model.setLockScreenVideo($0) }
+                        set: { enabled in Task { await model.setLockScreenVideo(enabled) } }
                     )
                 )
                 SettingsToggleRow(
@@ -197,6 +197,7 @@ private struct SettingsTextFieldRow: View {
             }
             Spacer(minLength: 14)
             SecureField(placeholder, text: $text)
+                .accessibilityLabel(title)
                 .textFieldStyle(.plain)
                 .padding(.horizontal, 10)
                 .frame(width: 220, height: 30)
@@ -231,9 +232,10 @@ private struct SettingsToggleRow: View {
                     .foregroundStyle(.white.opacity(0.55))
             }
             Spacer(minLength: 14)
-            Toggle("", isOn: $isOn)
+            Toggle(title, isOn: $isOn)
                 .labelsHidden()
                 .toggleStyle(.switch)
+                .accessibilityHint(description)
         }
         .padding(.vertical, 14)
         .overlay(alignment: .bottom) {
@@ -244,7 +246,7 @@ private struct SettingsToggleRow: View {
     }
 }
 
-struct ImportHelpView: View { @Environment(\.dismiss) private var dismiss; var body: some View { VStack(alignment: .leading, spacing: 18) { HStack { Image(systemName: "plus.circle.fill").foregroundStyle(.cyan); Text("Add your own wallpapers").font(.system(size: 21, weight: .semibold, design: .rounded)); Spacer(); Button { dismiss() } label: { Image(systemName: "xmark") }.buttonStyle(.plain) }; Text("Use the + button in the top bar or Import media on the main preview. Lumen copies the selected files into its own library, so you can safely move the originals later.").foregroundStyle(.secondary); Divider(); Text("Supported files").font(.headline); Text("Videos: .mov, .mp4, .m4v, .avi\nImages: .jpg, .jpeg, .png, .heic").foregroundStyle(.secondary); Text("Where to get them").font(.headline); Text("Use videos you created yourself, royalty-free clips from sites such as Pexels, Pixabay, Mixkit, or NASA media, and wallpapers you have permission to use. Avoid copyrighted videos from streaming services or content you do not own.").foregroundStyle(.secondary); Spacer() }.padding(28).frame(width: 470, height: 390).background(.ultraThinMaterial) } }
+struct ImportHelpView: View { @Environment(\.dismiss) private var dismiss; var body: some View { VStack(alignment: .leading, spacing: 18) { HStack { Image(systemName: "plus.circle.fill").foregroundStyle(.cyan); Text("Add your own wallpapers").font(.system(size: 21, weight: .semibold, design: .rounded)); Spacer(); Button { dismiss() } label: { Image(systemName: "xmark") }.buttonStyle(.plain).accessibilityLabel("Close import help").keyboardShortcut(.cancelAction) }; Text("Use the + button in the top bar or Import media on the main preview. Lumen copies the selected files into its own library, so you can safely move the originals later.").foregroundStyle(.secondary); Divider(); Text("Supported files").font(.headline); Text("Videos: .mov, .mp4, .m4v, .avi\nImages: .jpg, .jpeg, .png, .heic").foregroundStyle(.secondary); Text("Where to get them").font(.headline); Text("Use videos you created yourself, royalty-free clips from sites such as Pexels, Pixabay, Mixkit, or NASA media, and wallpapers you have permission to use. Avoid copyrighted videos from streaming services or content you do not own.").foregroundStyle(.secondary); Spacer() }.padding(28).frame(width: 470, height: 390).background(.ultraThinMaterial) } }
 
 struct RenameWallpaperView: View {
     @Environment(\.dismiss) private var dismiss
@@ -271,6 +273,7 @@ struct RenameWallpaperView: View {
                 Button { dismiss() } label: { Image(systemName: "xmark") }
                     .buttonStyle(.plain)
                     .help("Close")
+                    .accessibilityLabel("Close rename wallpaper")
             }
 
             TextField("Wallpaper name", text: $title)

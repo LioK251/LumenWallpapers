@@ -26,10 +26,12 @@ struct PexelsVideo: Codable, Identifiable, Hashable {
 
     /// Largest MP4 file at or below 4K, so we never pull down an 8K master by accident.
     var bestDownloadFile: PexelsVideoFile? {
-        let mp4Files = video_files.filter { ($0.file_type ?? "").contains("mp4") }
-        return mp4Files.filter { ($0.width ?? 0) > 0 && ($0.width ?? 0) <= 3840 }
-            .max { ($0.width ?? 0) < ($1.width ?? 0) }
-            ?? mp4Files.max { ($0.width ?? 0) < ($1.width ?? 0) }
+        video_files.filter {
+            guard $0.file_type?.lowercased() == "video/mp4",
+                  let width = $0.width, let height = $0.height,
+                  width > 0, height > 0 else { return false }
+            return max(width, height) <= 3840 && min(width, height) <= 2160
+        }.max { ($0.width! * $0.height!) < ($1.width! * $1.height!) }
     }
 
     var previewImageURL: URL? { URL(string: video_pictures.first?.picture ?? "") }

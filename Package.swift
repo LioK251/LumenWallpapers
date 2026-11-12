@@ -6,6 +6,7 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [.executable(name: "LumenWallpapers", targets: ["LumenWallpapers"])],
     targets: [
-        .executableTarget(name: "LumenWallpapers")
+        .executableTarget(name: "LumenWallpapers"),
+        .testTarget(name: "LumenWallpapersTests", dependencies: ["LumenWallpapers"])
     ]
 )

@@ -21,6 +21,12 @@ extension NSScreen {
         return (deviceDescription[key] as? NSNumber)?.stringValue ?? localizedName
     }
 
+    var wallpaperDisplayUUID: String? {
+        guard let number = deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
+              let uuid = CGDisplayCreateUUIDFromDisplayID(CGDirectDisplayID(number.uint32Value))?.takeRetainedValue() else { return nil }
+        return CFUUIDCreateString(nil, uuid) as String
+    }
+
     var isBuiltIn: Bool {
         let key = NSDeviceDescriptionKey("NSScreenNumber")
         guard let number = deviceDescription[key] as? NSNumber else { return false }

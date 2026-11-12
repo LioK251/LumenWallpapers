@@ -11,7 +11,7 @@ struct DashboardView: View {
     var body: some View {
         ZStack {
             FullscreenWallpaperBackground(
-                wallpaper: model.selected,
+                wallpaper: model.previewWallpaper,
                 isPlaying: model.effectiveIsPlaying,
                 reducedQuality: model.isReducedQualityActive,
                 retinaRendering: model.retinaRendering
@@ -55,7 +55,7 @@ struct DashboardView: View {
         .alert("Remove wallpaper?", isPresented: Binding(get: { removeTarget != nil }, set: { if !$0 { removeTarget = nil } })) {
             Button("Cancel", role: .cancel) { removeTarget = nil }
             Button("Remove", role: .destructive) {
-                if let wallpaper = removeTarget { model.remove(wallpaper) }
+                if let wallpaper = removeTarget { Task { await model.remove(wallpaper) } }
                 removeTarget = nil
             }
         } message: {
@@ -162,7 +162,7 @@ struct FullscreenWallpaperBackground: View {
         if item.kind == .procedural {
             LiveWallpaperCanvas(wallpaper: item, isPlaying: isPlaying, reducedQuality: reducedQuality)
         } else if item.kind == .video, let url = item.url {
-            VideoSurface(url: url, isPlaying: isPlaying, reducedQuality: reducedQuality, onReady: onReady)
+            VideoWallpaperView(url: url, isPlaying: isPlaying, reducedQuality: reducedQuality, onReady: onReady)
         } else if let url = item.url {
             WallpaperPreviewImage(image: WallpaperImageCache.image(for: url) ?? NSImage())
         } else {
@@ -228,12 +228,17 @@ struct TopGlassBar: View {
                 .frame(height: 42)
                 .background(.black.opacity(0.2), in: Capsule())
 
-                Button { model.importWallpaper() } label: { Image(systemName: "plus") }
+                if model.isUpdatingWallpaper {
+                    ProgressView().controlSize(.small).accessibilityLabel("Preparing wallpaper")
+                }
+                Button { Task { await model.importWallpaper() } } label: { Image(systemName: "plus") }
                     .buttonStyle(GlassIconStyle())
                     .help("Import wallpaper")
+                    .accessibilityLabel("Import wallpaper")
                 Button { showImportHelp = true } label: { Image(systemName: "questionmark") }
                     .buttonStyle(GlassIconStyle())
                     .help("How to add wallpapers")
+                    .accessibilityLabel("How to add wallpapers")
             }
             .padding(4)
             .background(.ultraThinMaterial, in: Capsule())
@@ -251,16 +256,16 @@ struct HeroShowcase: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
             Spacer(minLength: 180)
-            Text(model.selected.category.uppercased())
+            Text(model.previewWallpaper.category.uppercased())
                 .font(.system(size: 11, weight: .bold))
                 .tracking(1.6)
                 .foregroundStyle(.white.opacity(0.66))
                 .contentTransition(.opacity)
-            Text(model.selected.title)
+            Text(model.previewWallpaper.title)
                 .font(.system(size: 46, weight: .semibold, design: .rounded))
                 .lineLimit(1)
                 .contentTransition(.opacity)
-            Text(model.selected.subtitle)
+            Text(model.previewWallpaper.subtitle)
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(.white.opacity(0.72))
                 .contentTransition(.opacity)
@@ -269,7 +274,9 @@ struct HeroShowcase: View {
                     Image(systemName: model.isPlaying ? "pause.fill" : "play.fill")
                 }
                 .buttonStyle(LiquidButtonStyle())
-                Button { model.importWallpaper() } label: {
+                .accessibilityLabel(model.isPlaying ? "Pause wallpaper" : "Play wallpaper")
+                .help(model.isPlaying ? "Pause wallpaper" : "Play wallpaper")
+                Button { Task { await model.importWallpaper() } } label: {
                     Label("Import media", systemImage: "plus")
                 }
                 .buttonStyle(LiquidButtonStyle())
@@ -283,7 +290,7 @@ struct HeroShowcase: View {
                 .buttonStyle(LiquidButtonStyle())
             }
         }
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: model.selected.id)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: model.previewWallpaper.id)
         .frame(maxWidth: .infinity, minHeight: 430, alignment: .bottomLeading)
         .padding(.bottom, 8)
     }
@@ -324,7 +331,7 @@ struct WallpaperRow: View {
                             WallpaperCard(
                                 wallpaper: wallpaper,
                                 isSelected: wallpaper.id == model.selected.id,
-                                onSelect: { model.select(wallpaper) },
+                                onSelect: { Task { await model.select(wallpaper) } },
                                 onRename: onRename,
                                 onRemove: onRemove
                             )
@@ -354,6 +361,7 @@ struct RecommendationRow: View {
                 }
                 .buttonStyle(GlassIconStyle())
                 .help("Refresh recommendations")
+                .accessibilityLabel("Refresh recommendations")
             }
 
             ScrollView(.horizontal, showsIndicators: false) {
@@ -384,34 +392,23 @@ struct RecommendationCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ZStack(alignment: .bottomTrailing) {
-                AsyncImage(url: recommendation.previewURL, transaction: Transaction(animation: reduceMotion ? nil : .easeOut(duration: 0.18))) { phase in
-                    switch phase {
-                    case .success(let image): image.resizable().scaledToFill()
-                    case .failure: Color.black.opacity(0.3)
-                    default: Color.black.opacity(0.2).overlay(ProgressView().controlSize(.small))
-                    }
-                }
-                .frame(width: 220, height: 132)
-                .clipShape(RoundedRectangle(cornerRadius: 16))
-                .contentShape(RoundedRectangle(cornerRadius: 16))
-                .onTapGesture {
-                    if let downloadedWallpaper { model.select(downloadedWallpaper) }
-                }
-
-                Button {
-                    if let downloadedWallpaper {
-                        model.select(downloadedWallpaper)
-                    } else if !isDownloading {
-                        isDownloading = true
-                        Task {
-                            switch recommendation {
-                            case .image(let item): _ = await model.downloadWallhaven(item)
-                            case .video(let item): _ = await model.downloadPexelsVideo(item)
-                            }
-                            isDownloading = false
+                Button(action: useWallpaper) {
+                    AsyncImage(url: recommendation.previewURL, transaction: Transaction(animation: reduceMotion ? nil : .easeOut(duration: 0.18))) { phase in
+                        switch phase {
+                        case .success(let image): image.resizable().scaledToFill()
+                        case .failure: Color.black.opacity(0.3)
+                        default: Color.black.opacity(0.2).overlay(ProgressView().controlSize(.small))
                         }
                     }
-                } label: {
+                    .frame(width: 220, height: 132)
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .contentShape(RoundedRectangle(cornerRadius: 16))
+                }
+                .buttonStyle(.plain)
+                .disabled(isDownloading)
+                .accessibilityLabel("\(downloadedWallpaper == nil ? "Download and use" : "Use") \(recommendation.title)")
+
+                Button(action: useWallpaper) {
                     if isDownloading {
                         ProgressView().controlSize(.small)
                     } else {
@@ -419,8 +416,10 @@ struct RecommendationCard: View {
                     }
                 }
                 .buttonStyle(CardActionButtonStyle())
+                .disabled(isDownloading)
                 .padding(9)
                 .help(downloadedWallpaper == nil ? "Download and use wallpaper" : "Use downloaded wallpaper")
+                .accessibilityLabel(downloadedWallpaper == nil ? "Download and use wallpaper" : "Use downloaded wallpaper")
             }
             Text(recommendation.title)
                 .font(.system(size: 14, weight: .semibold))
@@ -434,6 +433,22 @@ struct RecommendationCard: View {
         .opacity(isHovered ? 1 : 0.96)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isHovered)
         .onHover { isHovered = $0 }
+    }
+
+    private func useWallpaper() {
+        guard !isDownloading else { return }
+        isDownloading = true
+        Task {
+            if let downloadedWallpaper {
+                _ = await model.select(downloadedWallpaper)
+            } else {
+                switch recommendation {
+                case .image(let item): _ = await model.downloadWallhaven(item)
+                case .video(let item): _ = await model.downloadPexelsVideo(item)
+                }
+            }
+            isDownloading = false
+        }
     }
 }
 
@@ -463,7 +478,7 @@ struct LibraryGrid: View {
                         WallpaperCard(
                             wallpaper: wallpaper,
                             isSelected: wallpaper.id == model.selected.id,
-                            onSelect: { model.select(wallpaper) },
+                            onSelect: { Task { await model.select(wallpaper) } },
                             onRename: onRename,
                             onRemove: onRemove
                         )
@@ -484,68 +499,85 @@ struct WallpaperCard: View {
     @State private var isHovered = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ZStack(alignment: .topTrailing) {
-                Group {
-                    if wallpaper.kind == .video, let url = wallpaper.url {
-                        VideoPosterView(url: url)
-                    } else {
-                        WallpaperMediaView(wallpaper: wallpaper, isPlaying: false, reducedQuality: true)
+        Button(action: onSelect) {
+            VStack(alignment: .leading, spacing: 8) {
+                ZStack(alignment: .topTrailing) {
+                    Group {
+                        if wallpaper.kind == .video, let url = wallpaper.url {
+                            VideoPosterView(url: url)
+                        } else {
+                            WallpaperMediaView(wallpaper: wallpaper, isPlaying: false, reducedQuality: true)
+                        }
                     }
-                }
                     .frame(width: 220, height: 132)
                     .clipShape(RoundedRectangle(cornerRadius: 16))
-                    .contentShape(RoundedRectangle(cornerRadius: 16))
-                    .onTapGesture(perform: onSelect)
-                if wallpaper.kind == .video {
-                    Image(systemName: "play.fill")
-                        .font(.system(size: 10, weight: .bold))
-                        .padding(8)
-                        .background(.black.opacity(0.48), in: Circle())
-                        .padding(9)
-                }
-                if isSelected {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.black)
-                        .padding(7)
-                        .background(.white, in: Circle())
-                        .padding(9)
-                        .transition(.opacity.combined(with: .scale(scale: 0.85)))
-                }
-                if wallpaper.kind != .procedural && isHovered {
-                    HStack(spacing: 6) {
-                        Button { onRename(wallpaper) } label: {
-                            Image(systemName: "pencil")
-                        }
-                        .buttonStyle(CardActionButtonStyle())
-                        .help("Rename wallpaper")
-
-                        Button { onRemove(wallpaper) } label: {
-                            Image(systemName: "trash")
-                        }
-                        .buttonStyle(CardActionButtonStyle())
-                        .help("Remove wallpaper")
+                    if wallpaper.kind == .video {
+                        Image(systemName: "play.fill")
+                            .font(.system(size: 10, weight: .bold))
+                            .padding(8)
+                            .background(.black.opacity(0.48), in: Circle())
+                            .padding(9)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                    .padding(9)
-                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                    if isSelected {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.black)
+                            .padding(7)
+                            .background(.white, in: Circle())
+                            .padding(9)
+                            .transition(.opacity)
+                    }
                 }
+                Text(wallpaper.title)
+                    .font(.system(size: 14, weight: .semibold))
+                    .lineLimit(1)
+                Text(wallpaper.subtitle)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .lineLimit(1)
             }
-            Text(wallpaper.title)
-                .font(.system(size: 14, weight: .semibold))
-                .lineLimit(1)
-                .onTapGesture(perform: onSelect)
-            Text(wallpaper.subtitle)
-                .font(.system(size: 11))
-                .foregroundStyle(.white.opacity(0.55))
-                .lineLimit(1)
-                .onTapGesture(perform: onSelect)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Use \(wallpaper.title)")
+        .accessibilityValue(isSelected ? "Selected" : "")
+        .contextMenu {
+            if wallpaper.kind != .procedural {
+                Button("Rename wallpaper") { onRename(wallpaper) }
+                Button("Remove wallpaper", role: .destructive) { onRemove(wallpaper) }
+            }
+        }
+        .accessibilityActions {
+            if wallpaper.kind != .procedural {
+                Button("Rename wallpaper") { onRename(wallpaper) }
+                Button("Remove wallpaper") { onRemove(wallpaper) }
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            if wallpaper.kind != .procedural && isHovered {
+                HStack(spacing: 6) {
+                    Button { onRename(wallpaper) } label: {
+                        Image(systemName: "pencil")
+                    }
+                    .buttonStyle(CardActionButtonStyle())
+                    .help("Rename wallpaper")
+                    .accessibilityLabel("Rename \(wallpaper.title)")
+
+                    Button { onRemove(wallpaper) } label: {
+                        Image(systemName: "trash")
+                    }
+                    .buttonStyle(CardActionButtonStyle())
+                    .help("Remove wallpaper")
+                    .accessibilityLabel("Remove \(wallpaper.title)")
+                }
+                .padding(9)
+                .frame(width: 220, height: 132, alignment: .bottomTrailing)
+                .transition(.opacity)
+            }
         }
         .frame(width: 220, alignment: .leading)
         .scaleEffect(reduceMotion ? 1 : (isHovered ? 1.015 : 1))
         .opacity(isHovered ? 1 : 0.96)
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(isSelected ? 0.65 : 0), lineWidth: 1.5))
         .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isHovered)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isSelected)
         .onHover { hovering in

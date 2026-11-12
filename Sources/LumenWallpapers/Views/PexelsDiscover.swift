@@ -114,48 +114,40 @@ struct PexelsVideoCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ZStack(alignment: .bottomTrailing) {
-                AsyncImage(url: item.previewImageURL, transaction: Transaction(animation: reduceMotion ? nil : .easeOut(duration: 0.18))) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image.resizable().scaledToFill()
-                    case .failure:
-                        Color.black.opacity(0.3)
-                    default:
-                        Color.black.opacity(0.2).overlay(ProgressView().controlSize(.small))
-                    }
-                }
-                .frame(width: 220, height: 132)
-                .clipShape(RoundedRectangle(cornerRadius: 16))
-                .contentShape(RoundedRectangle(cornerRadius: 16))
-                .onTapGesture {
-                    if let downloadedWallpaper { model.select(downloadedWallpaper) }
-                }
-                .overlay(alignment: .topLeading) {
-                    Text(item.durationLabel)
-                        .font(.system(size: 10, weight: .bold))
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(.black.opacity(0.55), in: Capsule())
-                        .padding(9)
-                }
-                .overlay {
-                    Image(systemName: "play.fill")
-                        .font(.system(size: 11, weight: .bold))
-                        .padding(9)
-                        .background(.black.opacity(0.4), in: Circle())
-                }
-
-                Button {
-                    if let downloadedWallpaper {
-                        model.select(downloadedWallpaper)
-                    } else if !isDownloading {
-                        isDownloading = true
-                        Task {
-                            _ = await model.downloadPexelsVideo(item)
-                            isDownloading = false
+                Button(action: useWallpaper) {
+                    AsyncImage(url: item.previewImageURL, transaction: Transaction(animation: reduceMotion ? nil : .easeOut(duration: 0.18))) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image.resizable().scaledToFill()
+                        case .failure:
+                            Color.black.opacity(0.3)
+                        default:
+                            Color.black.opacity(0.2).overlay(ProgressView().controlSize(.small))
                         }
                     }
-                } label: {
+                    .frame(width: 220, height: 132)
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .contentShape(RoundedRectangle(cornerRadius: 16))
+                    .overlay(alignment: .topLeading) {
+                        Text(item.durationLabel)
+                            .font(.system(size: 10, weight: .bold))
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(.black.opacity(0.55), in: Capsule())
+                            .padding(9)
+                    }
+                    .overlay {
+                        Image(systemName: "play.fill")
+                            .font(.system(size: 11, weight: .bold))
+                            .padding(9)
+                            .background(.black.opacity(0.4), in: Circle())
+                    }
+                }
+                .buttonStyle(.plain)
+                .disabled(isDownloading)
+                .accessibilityLabel("\(downloadedWallpaper == nil ? "Download and use" : "Use") \(item.width) by \(item.height) video wallpaper")
+
+                Button(action: useWallpaper) {
                     if isDownloading {
                         ProgressView().controlSize(.small)
                     } else {
@@ -163,11 +155,13 @@ struct PexelsVideoCard: View {
                     }
                 }
                 .buttonStyle(CardActionButtonStyle())
+                .disabled(isDownloading)
                 .padding(9)
                 .help(downloadedWallpaper == nil ? "Download and use wallpaper" : "Use downloaded wallpaper")
+                .accessibilityLabel(downloadedWallpaper == nil ? "Download and use wallpaper" : "Use downloaded wallpaper")
             }
             .overlay(alignment: .bottomLeading) {
-                DiscoverRemoveButton(wallpaper: downloadedWallpaper, isHovered: isHovered, model: model)
+                DiscoverRemoveButton(wallpaper: downloadedWallpaper, model: model)
                     .padding(9)
             }
             Text("\(item.width)×\(item.height)")
@@ -183,6 +177,19 @@ struct PexelsVideoCard: View {
         .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isHovered)
         .onHover { hovering in
             isHovered = hovering
+        }
+    }
+
+    private func useWallpaper() {
+        guard !isDownloading else { return }
+        isDownloading = true
+        Task {
+            if let downloadedWallpaper {
+                _ = await model.select(downloadedWallpaper)
+            } else {
+                _ = await model.downloadPexelsVideo(item)
+            }
+            isDownloading = false
         }
     }
 }

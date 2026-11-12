@@ -5,24 +5,22 @@ struct GitHubRelease: Decodable, Identifiable {
     let tag_name: String
     let draft: Bool
     let prerelease: Bool
+    let published_at: Date?
     var id: String { tag_name }
     var url: URL { ReleaseUpdateChecker.repositoryURL.appendingPathComponent("releases/tag").appendingPathComponent(tag_name) }
 
-    static func isNewer(_ candidate: String, than installed: String) -> Bool {
-        func components(_ value: String) -> [Int]? {
-            let normalized = value.hasPrefix("v") ? String(value.dropFirst()) : value
-            let parts = normalized.split(separator: ".", omittingEmptySubsequences: false)
-            guard parts.count >= 3, parts.allSatisfy({ !$0.isEmpty && $0.allSatisfy({ $0.isASCII && $0.isNumber }) }) else { return nil }
-            let numbers = parts.compactMap { Int($0) }
-            return numbers.count == parts.count ? numbers : nil
-        }
-        guard let lhs = components(candidate), let rhs = components(installed) else { return false }
-        for index in 0..<max(lhs.count, rhs.count) {
-            let left = index < lhs.count ? lhs[index] : 0
-            let right = index < rhs.count ? rhs[index] : 0
-            if left != right { return left > right }
-        }
-        return false
+    static func normalizedVersion(_ version: String) -> String {
+        version.hasPrefix("v") ? String(version.dropFirst()) : version
+    }
+
+    static func latestUpdate(in releases: [GitHubRelease], installedVersion: String) -> GitHubRelease? {
+        let stable = releases.filter { !$0.draft && !$0.prerelease && $0.published_at != nil }
+        let installedTag = normalizedVersion(installedVersion)
+        guard let installed = stable.first(where: { normalizedVersion($0.tag_name) == installedTag }),
+              let installedDate = installed.published_at else { return nil }
+        return stable.filter {
+            normalizedVersion($0.tag_name) != installedTag && $0.published_at! > installedDate
+        }.max { $0.published_at! < $1.published_at! }
     }
 }
 
@@ -47,9 +45,8 @@ final class ReleaseUpdateChecker: ObservableObject {
         }
     }
 
-    func shouldPresent(_ release: GitHubRelease, installed: String) -> Bool {
-        !release.draft && !release.prerelease
-            && GitHubRelease.isNewer(release.tag_name, than: installed)
+    func shouldPresent(_ release: GitHubRelease) -> Bool {
+        !release.draft && !release.prerelease && release.published_at != nil
             && !(defaults.stringArray(forKey: Self.shownVersionsKey) ?? []).contains(release.id)
     }
 
@@ -61,15 +58,27 @@ final class ReleaseUpdateChecker: ObservableObject {
         lastCheck = Date()
         defer { isChecking = false }
         do {
-            var request = URLRequest(url: URL(string: "https://api.github.com/repos/LioK251/LumenWallpapers/releases/latest")!)
-            request.timeoutInterval = 15
-            request.cachePolicy = .reloadIgnoringLocalCacheData
-            request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-            request.setValue("Lumen/\(installed)", forHTTPHeaderField: "User-Agent")
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
-            let release = try JSONDecoder().decode(GitHubRelease.self, from: data)
-            if shouldPresent(release, installed: installed) { availableRelease = release }
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            var releases: [GitHubRelease] = []
+            var page = 1
+            while true {
+                try Task.checkCancellation()
+                var request = URLRequest(url: URL(string: "https://api.github.com/repos/LioK251/LumenWallpapers/releases?per_page=100&page=\(page)")!)
+                request.timeoutInterval = 15
+                request.cachePolicy = .reloadIgnoringLocalCacheData
+                request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+                request.setValue("Lumen/\(installed)", forHTTPHeaderField: "User-Agent")
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
+                let batch = try decoder.decode([GitHubRelease].self, from: data)
+                releases.append(contentsOf: batch)
+                if batch.count < 100 { break }
+                page += 1
+            }
+            if let release = GitHubRelease.latestUpdate(in: releases, installedVersion: installed), shouldPresent(release) {
+                availableRelease = release
+            }
         } catch {
             if Task.isCancelled { lastCheck = nil }
         }

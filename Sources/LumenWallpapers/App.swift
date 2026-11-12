@@ -4,14 +4,20 @@ import AppKit
 @MainActor
 final class LumenApplicationDelegate: NSObject, NSApplicationDelegate {
     var reopenMainWindow: (() -> Void)?
-    var handoffWallpaperOnQuit: (() -> Bool)?
+    var handoffWallpaperOnQuit: (() async -> Bool)?
+    private var terminationPending = false
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if handoffWallpaperOnQuit?() == false {
-            reopenMainWindow?()
-            return .terminateCancel
+        guard !terminationPending else { return .terminateLater }
+        guard let handoffWallpaperOnQuit else { return .terminateNow }
+        terminationPending = true
+        Task {
+            let shouldQuit = await handoffWallpaperOnQuit()
+            terminationPending = false
+            if !shouldQuit { reopenMainWindow?() }
+            sender.reply(toApplicationShouldTerminate: shouldQuit)
         }
-        return .terminateNow
+        return .terminateLater
     }
 
     func applicationShouldHandleReopen(
@@ -95,7 +101,7 @@ private struct MainWindowRoot: View {
                 .onAppear { updates.markPresented(release) }
             }
             .onAppear {
-                applicationDelegate.handoffWallpaperOnQuit = { model.handoffWallpaperOnQuit() }
+                applicationDelegate.handoffWallpaperOnQuit = { await model.handoffWallpaperOnQuit() }
                 applicationDelegate.reopenMainWindow = {
                     NSApp.unhide(nil)
                     openWindow(id: "main")

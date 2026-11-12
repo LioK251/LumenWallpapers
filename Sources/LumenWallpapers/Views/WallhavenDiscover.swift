@@ -17,9 +17,10 @@ struct DiscoverView: View {
                 Text("Discover")
                     .font(.system(size: 28, weight: .semibold, design: .rounded))
                 Spacer()
-                Picker("", selection: $source) {
+                Picker("Wallpaper source", selection: $source) {
                     ForEach(DiscoverSource.allCases) { Text($0.rawValue).tag($0) }
                 }
+                .labelsHidden()
                 .pickerStyle(.segmented)
                 .frame(width: 160)
             }
@@ -124,34 +125,26 @@ struct WallhavenCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ZStack(alignment: .bottomTrailing) {
-                AsyncImage(url: URL(string: item.thumbs.large), transaction: Transaction(animation: reduceMotion ? nil : .easeOut(duration: 0.18))) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image.resizable().scaledToFill()
-                    case .failure:
-                        Color.black.opacity(0.3)
-                    default:
-                        Color.black.opacity(0.2).overlay(ProgressView().controlSize(.small))
-                    }
-                }
-                .frame(width: 220, height: 132)
-                .clipShape(RoundedRectangle(cornerRadius: 16))
-                .contentShape(RoundedRectangle(cornerRadius: 16))
-                .onTapGesture {
-                    if let downloadedWallpaper { model.select(downloadedWallpaper) }
-                }
-
-                Button {
-                    if let downloadedWallpaper {
-                        model.select(downloadedWallpaper)
-                    } else if !isDownloading {
-                        isDownloading = true
-                        Task {
-                            _ = await model.downloadWallhaven(item)
-                            isDownloading = false
+                Button(action: useWallpaper) {
+                    AsyncImage(url: URL(string: item.thumbs.large), transaction: Transaction(animation: reduceMotion ? nil : .easeOut(duration: 0.18))) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image.resizable().scaledToFill()
+                        case .failure:
+                            Color.black.opacity(0.3)
+                        default:
+                            Color.black.opacity(0.2).overlay(ProgressView().controlSize(.small))
                         }
                     }
-                } label: {
+                    .frame(width: 220, height: 132)
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .contentShape(RoundedRectangle(cornerRadius: 16))
+                }
+                .buttonStyle(.plain)
+                .disabled(isDownloading)
+                .accessibilityLabel("\(downloadedWallpaper == nil ? "Download and use" : "Use") \(item.resolution) wallpaper")
+
+                Button(action: useWallpaper) {
                     if isDownloading {
                         ProgressView().controlSize(.small)
                     } else {
@@ -159,11 +152,13 @@ struct WallhavenCard: View {
                     }
                 }
                 .buttonStyle(CardActionButtonStyle())
+                .disabled(isDownloading)
                 .padding(9)
                 .help(downloadedWallpaper == nil ? "Download and use wallpaper" : "Use downloaded wallpaper")
+                .accessibilityLabel(downloadedWallpaper == nil ? "Download and use wallpaper" : "Use downloaded wallpaper")
             }
             .overlay(alignment: .bottomLeading) {
-                DiscoverRemoveButton(wallpaper: downloadedWallpaper, isHovered: isHovered, model: model)
+                DiscoverRemoveButton(wallpaper: downloadedWallpaper, model: model)
                     .padding(9)
             }
             Text(item.resolution)
@@ -181,18 +176,29 @@ struct WallhavenCard: View {
             isHovered = hovering
         }
     }
+
+    private func useWallpaper() {
+        guard !isDownloading else { return }
+        isDownloading = true
+        Task {
+            if let downloadedWallpaper {
+                _ = await model.select(downloadedWallpaper)
+            } else {
+                _ = await model.downloadWallhaven(item)
+            }
+            isDownloading = false
+        }
+    }
 }
 
 struct DiscoverRemoveButton: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let wallpaper: Wallpaper?
-    let isHovered: Bool
     @ObservedObject var model: WallpaperModel
     @State private var pendingRemoval: Wallpaper?
 
     var body: some View {
         ZStack {
-            if isHovered, let wallpaper {
+            if let wallpaper {
                 Button {
                     pendingRemoval = wallpaper
                 } label: {
@@ -200,17 +206,16 @@ struct DiscoverRemoveButton: View {
                 }
                 .buttonStyle(CardActionButtonStyle())
                 .help("Remove downloaded wallpaper")
-                .transition(.opacity)
+                .accessibilityLabel("Remove \(wallpaper.title)")
             }
         }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isHovered)
         .alert("Remove wallpaper?", isPresented: Binding(
             get: { pendingRemoval != nil },
             set: { if !$0 { pendingRemoval = nil } }
         )) {
             Button("Cancel", role: .cancel) { pendingRemoval = nil }
             Button("Remove", role: .destructive) {
-                if let pendingRemoval { model.remove(pendingRemoval) }
+                if let pendingRemoval { Task { await model.remove(pendingRemoval) } }
                 pendingRemoval = nil
             }
         } message: {

@@ -2,6 +2,15 @@
 
 All notable changes to Lumen are documented here.
 
+## [0.1.9] - 2026-11-12
+
+- Fix native video wallpaper selection on newer macOS and preserve previous wallpaper settings during recovery.
+- Show selected videos promptly while macOS prepares them.
+- Fix library recovery, downloads, search privacy settings, and animation after quitting.
+- Remove wallpaper selection borders and improve keyboard access.
+- Keep update alerts working with the new version numbering.
+- Save release artifacts under `build/releases/` and clean successful build caches.
+
 ## [1.0.8.1] - 2026-10-02
 
 ### Fixed

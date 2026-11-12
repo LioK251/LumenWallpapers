@@ -41,6 +41,9 @@ final class WallpaperModel: NSObject, ObservableObject {
     @Published var searchText = ""
     @Published private(set) var wallpapers: [Wallpaper]
     @Published var importError: String?
+    @Published private(set) var isUpdatingWallpaper = false
+    @Published private(set) var pendingWallpaper: Wallpaper?
+    var previewWallpaper: Wallpaper { pendingWallpaper ?? selected }
     @Published var launchAtLoginEnabled = false
     @Published private(set) var lockScreenVideoEnabled: Bool
     @Published var reduceQualityOnBattery: Bool {
@@ -93,6 +96,7 @@ final class WallpaperModel: NSObject, ObservableObject {
     @Published var allowNSFWSearch: Bool {
         didSet {
             UserDefaults.standard.set(allowNSFWSearch, forKey: Self.allowNSFWSearchDefaultsKey)
+            recommendations.removeAll()
             refreshRecommendations()
         }
     }
@@ -108,6 +112,9 @@ final class WallpaperModel: NSObject, ObservableObject {
     private var occludedWallpaperScreens = Set<String>()
     private var recommendationTask: Task<Void, Never>?
     private var latestCPUUsage = 0.0
+    private var wallpaperUpdateTask: Task<Void, Never>?
+    private var wallpaperRequestID = UUID()
+    private var libraryLoadFailed = false
 
     private let libraryURL: URL
     private let builtIns: [Wallpaper] = [
@@ -132,14 +139,20 @@ final class WallpaperModel: NSObject, ObservableObject {
         allowNSFWSearch = Self.storedBool(forKey: Self.allowNSFWSearchDefaultsKey, defaultValue: false)
         try? FileManager.default.createDirectory(at: libraryURL, withIntermediateDirectories: true)
         LegacyWallpaperMigration.cleanupOldSnapshotState(directory: libraryURL)
-        let stored = WallpaperModel.loadLibrary(from: libraryURL.appendingPathComponent("library.json"))
-        let availableWallpapers = builtIns + stored.filter { item in
-            item.url.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+        let stored: [Wallpaper]
+        var libraryError: String?
+        do { stored = try WallpaperLibrary.load(from: libraryURL.appendingPathComponent("library.json")) }
+        catch {
+            stored = []
+            libraryLoadFailed = true
+            libraryError = "Could not read library.json. The file has been preserved; library changes are disabled until it is repaired."
         }
+        let availableWallpapers = builtIns + stored
         wallpapers = availableWallpapers
         let savedKey = UserDefaults.standard.string(forKey: Self.selectedWallpaperDefaultsKey)
         selected = availableWallpapers.first { $0.persistenceKey == savedKey } ?? availableWallpapers[0]
         super.init()
+        importError = libraryError
         do { try agentConfiguration().save() }
         catch { importError = "Could not reset background wallpaper: \(error.localizedDescription)" }
         launchAtLoginEnabled = LaunchAtLoginManager.isEnabled
@@ -318,21 +331,55 @@ final class WallpaperModel: NSObject, ObservableObject {
         updateSystemWallpaper()
     }
 
-    private func synchronizeSystemWallpaper(_ wallpaper: Wallpaper) throws {
-        if lockScreenVideoEnabled, wallpaper.kind == .video, let url = wallpaper.url {
-            try lockScreenVideoManager.installAndConfigure(videoURL: url)
+    private func synchronizeSystemWallpaper(_ wallpaper: Wallpaper, videoEnabled: Bool? = nil) async throws {
+        try Task.checkCancellation()
+        let display = selectedDisplay
+        if videoEnabled ?? lockScreenVideoEnabled, LockScreenVideoManager.isAvailable,
+           wallpaper.kind == .video, let url = wallpaper.url {
+            try await lockScreenVideoManager.installAndConfigure(videoURL: url, display: display)
         } else {
             let imageURL = try PersistentWallpaperManager.prepare(wallpaper: wallpaper)
             if lockScreenVideoManager.hasStoredConfiguration {
                 try lockScreenVideoManager.restorePreviousWallpaper()
             }
-            try PersistentWallpaperManager.apply(imageURL: imageURL, display: selectedDisplay)
+            try Task.checkCancellation()
+            try PersistentWallpaperManager.apply(imageURL: imageURL, display: display)
+        }
+    }
+
+    private func beginWallpaperUpdate() -> UUID {
+        wallpaperUpdateTask?.cancel()
+        lockScreenVideoManager.cancelPendingInstallation()
+        wallpaperRequestID = UUID()
+        pendingWallpaper = nil
+        isUpdatingWallpaper = true
+        return wallpaperRequestID
+    }
+
+    private func finishWallpaperUpdate(_ id: UUID) {
+        if wallpaperRequestID == id {
+            isUpdatingWallpaper = false
+            pendingWallpaper = nil
+            syncDesktopWallpaper()
         }
     }
 
     private func updateSystemWallpaper() {
-        do { try synchronizeSystemWallpaper(selected) }
-        catch { importError = "Could not update the macOS wallpaper: \(error.localizedDescription)" }
+        let id = beginWallpaperUpdate()
+        let wallpaper = selected
+        wallpaperUpdateTask = Task {
+            defer { finishWallpaperUpdate(id) }
+            do {
+                try Task.checkCancellation()
+                guard wallpaperRequestID == id else { return }
+                try await synchronizeSystemWallpaper(wallpaper)
+            }
+            catch {
+                if !(error is CancellationError), wallpaperRequestID == id {
+                    importError = "Could not update the macOS wallpaper: \(error.localizedDescription)"
+                }
+            }
+        }
     }
 
     private func updateWallpaperOcclusion(screenKey: String, isVisible: Bool) {
@@ -353,7 +400,7 @@ final class WallpaperModel: NSObject, ObservableObject {
 
     func syncDesktopWallpaper() {
         desktopController?.apply(
-            wallpaper: selected,
+            wallpaper: previewWallpaper,
             isPlaying: effectiveIsPlaying,
             display: selectedDisplay,
             reducedQuality: isReducedQualityActive,
@@ -375,10 +422,14 @@ final class WallpaperModel: NSObject, ObservableObject {
         )
     }
 
-    func handoffWallpaperOnQuit() -> Bool {
+    func handoffWallpaperOnQuit() async -> Bool {
+        let id = beginWallpaperUpdate()
+        defer { finishWallpaperUpdate(id) }
         do {
             try agentConfiguration().save()
-            try synchronizeSystemWallpaper(selected)
+            try await synchronizeSystemWallpaper(selected)
+            try Task.checkCancellation()
+            guard wallpaperRequestID == id else { return false }
         } catch {
             importError = "Could not keep your wallpaper after quitting: \(error.localizedDescription)"
             return false
@@ -386,7 +437,7 @@ final class WallpaperModel: NSObject, ObservableObject {
 
         guard keepAnimatingAfterQuit,
               isPlaying,
-              selected.kind == .procedural || (selected.kind == .video && !LockScreenVideoManager.isSelected) else {
+              selected.kind == .procedural || selected.kind == .video else {
             return true
         }
 
@@ -394,8 +445,7 @@ final class WallpaperModel: NSObject, ObservableObject {
             let sessionID = UUID().uuidString
             let agentURL = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/LumenWallpaperAgent")
             guard FileManager.default.isExecutableFile(atPath: agentURL.path) else {
-                NSLog("Lumen wallpaper agent is unavailable at %@", agentURL.path)
-                return true
+                throw CocoaError(.fileNoSuchFile, userInfo: [NSFilePathErrorKey: agentURL.path])
             }
             try agentConfiguration(sessionID: sessionID).save()
             let agent = Process()
@@ -411,15 +461,24 @@ final class WallpaperModel: NSObject, ObservableObject {
     }
 
     @discardableResult
-    func select(_ wallpaper: Wallpaper) -> Bool {
+    func select(_ wallpaper: Wallpaper) async -> Bool {
+        guard !Task.isCancelled else { return false }
         guard wallpapers.contains(where: { $0.id == wallpaper.id }) else { return false }
+        let id = beginWallpaperUpdate()
+        pendingWallpaper = wallpaper
+        syncDesktopWallpaper()
+        defer { finishWallpaperUpdate(id) }
         do {
-            try synchronizeSystemWallpaper(wallpaper)
+            try await synchronizeSystemWallpaper(wallpaper)
+            try Task.checkCancellation()
         } catch {
-            importError = "Could not switch wallpaper: \(error.localizedDescription)"
+            if !(error is CancellationError), wallpaperRequestID == id {
+                importError = "Could not switch wallpaper: \(error.localizedDescription)"
+            }
             return false
         }
-        selected = wallpaper
+        guard wallpaperRequestID == id, let current = wallpapers.first(where: { $0.id == wallpaper.id }) else { return false }
+        selected = current
         UserDefaults.standard.set(wallpaper.persistenceKey, forKey: Self.selectedWallpaperDefaultsKey)
         syncDesktopWallpaper()
         do { try agentConfiguration().save() }
@@ -427,42 +486,28 @@ final class WallpaperModel: NSObject, ObservableObject {
         return true
     }
 
-    func configureLockScreenVideo() {
-        guard selected.kind == .video, let url = selected.url else {
+    func configureLockScreenVideo() async {
+        guard selected.kind == .video else {
             importError = "Select an imported video before setting up Video Wallpaper."
             return
         }
-
-        do {
-            try lockScreenVideoManager.installAndConfigure(videoURL: url)
-            lockScreenVideoEnabled = true
-            UserDefaults.standard.set(true, forKey: Self.lockScreenVideoEnabledDefaultsKey)
-        } catch {
-            importError = "Could not set up Video Wallpaper: \(error.localizedDescription)"
-        }
+        await setLockScreenVideo(true)
     }
 
-    func setLockScreenVideo(_ enabled: Bool) {
-        if enabled {
-            if selected.kind == .video {
-                configureLockScreenVideo()
-            } else {
-                lockScreenVideoEnabled = true
-                UserDefaults.standard.set(true, forKey: Self.lockScreenVideoEnabledDefaultsKey)
-            }
-            return
-        }
-
+    func setLockScreenVideo(_ enabled: Bool) async {
+        guard !Task.isCancelled else { return }
+        let id = beginWallpaperUpdate()
+        defer { finishWallpaperUpdate(id) }
         do {
-            let imageURL = try PersistentWallpaperManager.prepare(wallpaper: selected)
-            if lockScreenVideoManager.hasStoredConfiguration {
-                try lockScreenVideoManager.restorePreviousWallpaper()
-            }
-            try PersistentWallpaperManager.apply(imageURL: imageURL, display: selectedDisplay)
-            lockScreenVideoEnabled = false
-            UserDefaults.standard.set(false, forKey: Self.lockScreenVideoEnabledDefaultsKey)
+            try await synchronizeSystemWallpaper(selected, videoEnabled: enabled)
+            try Task.checkCancellation()
+            guard wallpaperRequestID == id else { return }
+            lockScreenVideoEnabled = enabled
+            UserDefaults.standard.set(enabled, forKey: Self.lockScreenVideoEnabledDefaultsKey)
         } catch {
-            importError = "Could not restore the previous wallpaper: \(error.localizedDescription)"
+            if !(error is CancellationError), wallpaperRequestID == id {
+                importError = "Could not update Video Wallpaper: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -480,7 +525,7 @@ final class WallpaperModel: NSObject, ObservableObject {
         }
     }
 
-    func importWallpaper() {
+    func importWallpaper() async {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.movie, .video, .mpeg4Movie, .quickTimeMovie, .image]
         panel.allowsMultipleSelection = true
@@ -499,7 +544,7 @@ final class WallpaperModel: NSObject, ObservableObject {
             }
             try persistImported(wallpapers + imported)
             wallpapers.append(contentsOf: imported)
-            if let first = imported.first { select(first) }
+            if let first = imported.first { await select(first) }
         } catch {
             copiedURLs.forEach { try? FileManager.default.removeItem(at: $0) }
             importError = "Could not import this file: \(error.localizedDescription)"
@@ -508,8 +553,7 @@ final class WallpaperModel: NSObject, ObservableObject {
 
     func downloadWallhaven(_ item: WallhavenWallpaper) async -> Bool {
         if let existing = wallpaperForWallhaven(item) {
-            select(existing)
-            return true
+            return await select(existing)
         }
         guard let remoteURL = URL(string: item.path) else {
             importError = "That wallpaper doesn't have a downloadable file."
@@ -523,8 +567,7 @@ final class WallpaperModel: NSObject, ObservableObject {
                 return false
             }
             if let existing = wallpaperForWallhaven(item) {
-                select(existing)
-                return true
+                return await select(existing)
             }
             let fallback = WebPageMetadata.suggestedName(
                 from: response,
@@ -533,9 +576,9 @@ final class WallpaperModel: NSObject, ObservableObject {
             ) ?? "Wallpaper \(item.id)"
             let title = await WebPageMetadata.title(for: item.url, fallback: fallback)
             if let existing = wallpaperForWallhaven(item) {
-                select(existing)
-                return true
+                return await select(existing)
             }
+            try Task.checkCancellation()
             let ext = remoteURL.pathExtension.isEmpty ? "jpg" : remoteURL.pathExtension
             let destination = uniqueDestination(named: safeFileStem(title), ext: ext)
             try FileManager.default.moveItem(at: tempURL, to: destination)
@@ -557,8 +600,7 @@ final class WallpaperModel: NSObject, ObservableObject {
                 throw error
             }
             wallpapers.append(wallpaper)
-            select(wallpaper)
-            return true
+            return await select(wallpaper)
         } catch {
             importError = "Could not download this wallpaper: \(error.localizedDescription)"
             return false
@@ -567,8 +609,7 @@ final class WallpaperModel: NSObject, ObservableObject {
 
     func downloadPexelsVideo(_ video: PexelsVideo) async -> Bool {
         if let existing = wallpaperForPexels(video) {
-            select(existing)
-            return true
+            return await select(existing)
         }
         guard let file = video.bestDownloadFile, let remoteURL = URL(string: file.link) else {
             importError = "This Pexels video doesn't have a downloadable file."
@@ -582,16 +623,15 @@ final class WallpaperModel: NSObject, ObservableObject {
                 return false
             }
             if let existing = wallpaperForPexels(video) {
-                select(existing)
-                return true
+                return await select(existing)
             }
             let fallback = WebPageMetadata.suggestedName(from: response, remoteURL: remoteURL)
                 ?? "Pexels Video \(video.id)"
             let title = await WebPageMetadata.title(for: video.url, fallback: fallback)
             if let existing = wallpaperForPexels(video) {
-                select(existing)
-                return true
+                return await select(existing)
             }
+            try Task.checkCancellation()
             let destination = uniqueDestination(named: safeFileStem(title), ext: "mp4")
             try FileManager.default.moveItem(at: tempURL, to: destination)
             let wallpaper = Wallpaper(
@@ -612,8 +652,7 @@ final class WallpaperModel: NSObject, ObservableObject {
                 throw error
             }
             wallpapers.append(wallpaper)
-            select(wallpaper)
-            return true
+            return await select(wallpaper)
         } catch {
             importError = "Could not download this video: \(error.localizedDescription)"
             return false
@@ -635,18 +674,20 @@ final class WallpaperModel: NSObject, ObservableObject {
     }
 
     private func persistImported(_ items: [Wallpaper]) throws {
-        let imported = items.filter { $0.kind != .procedural }
-        let data = try JSONEncoder().encode(imported)
-        try data.write(to: libraryURL.appendingPathComponent("library.json"), options: .atomic)
+        guard !libraryLoadFailed else { throw CocoaError(.fileReadCorruptFile) }
+        try WallpaperLibrary.save(items, to: libraryURL.appendingPathComponent("library.json"))
     }
 
-    func remove(_ wallpaper: Wallpaper) {
+    func remove(_ wallpaper: Wallpaper) async {
         guard wallpaper.kind != .procedural,
               wallpapers.contains(where: { $0.id == wallpaper.id }) else { return }
-        let remaining = wallpapers.filter { $0.id != wallpaper.id }
-        if selected.id == wallpaper.id, let fallback = remaining.first {
-            guard select(fallback) else { return }
+        if pendingWallpaper?.id == wallpaper.id {
+            guard await select(selected) else { return }
         }
+        if selected.id == wallpaper.id, let fallback = wallpapers.first(where: { $0.id != wallpaper.id }) {
+            guard await select(fallback), selected.id != wallpaper.id else { return }
+        }
+        let remaining = wallpapers.filter { $0.id != wallpaper.id }
         do {
             try persistImported(remaining)
         } catch {
@@ -669,7 +710,7 @@ final class WallpaperModel: NSObject, ObservableObject {
         }
         wallpapers = remaining
         if selected.id == wallpaper.id, let fallback = wallpapers.first {
-            select(fallback)
+            await select(fallback)
         } else {
             syncDesktopWallpaper()
         }
@@ -693,5 +734,18 @@ final class WallpaperModel: NSObject, ObservableObject {
         }
     }
 
-    private static func loadLibrary(from url: URL) -> [Wallpaper] { guard let data = try? Data(contentsOf: url), let items = try? JSONDecoder().decode([Wallpaper].self, from: data) else { return [] }; return items }
+}
+
+enum WallpaperLibrary {
+    static func load(from url: URL) throws -> [Wallpaper] {
+        do { return try JSONDecoder().decode([Wallpaper].self, from: Data(contentsOf: url)) }
+        catch let error as CocoaError where error.code == .fileReadNoSuchFile { return [] }
+    }
+
+    static func save(_ items: [Wallpaper], to url: URL) throws {
+        // Re-read before saving so externally corrupted libraries are never overwritten.
+        _ = try load(from: url)
+        let data = try JSONEncoder().encode(items.filter { $0.kind != .procedural })
+        try data.write(to: url, options: .atomic)
+    }
 }

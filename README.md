@@ -9,7 +9,6 @@
 </p>
 
 <p align="center">
-  <a href="https://iumen.vercel.app/"><img src="https://img.shields.io/badge/website-iumen.vercel.app-1d63f2?style=flat-square" alt="Website"></a>
   <img src="https://img.shields.io/badge/Swift-6.0-F05138?style=flat-square&logo=swift&logoColor=white" alt="Swift 6">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2ea44f?style=flat-square" alt="MIT license"></a>
   <img src="https://img.shields.io/badge/macOS-14%2B-111111?style=flat-square&logo=apple&logoColor=white" alt="macOS 14 or newer">
@@ -39,8 +38,6 @@ Lumen keeps your desktop calm and alive without subscriptions, accounts, or a cl
 
 ## Install
 
-Visit the [website](https://iumen.vercel.app/) for an overview of Lumen, or grab a build directly below.
-
 ### Download a release
 
 1. Open the [Releases](../../releases) page.
@@ -57,7 +54,7 @@ For a trusted local or ad-hoc build, Control-click **Lumen.app**, choose **Open*
 Requirements:
 
 - macOS 14 Sonoma or newer
-- Xcode 16 or newer (the project is currently developed with Xcode 26)
+- Xcode 16 or newer
 
 The Xcode project is the canonical build entry point:
 
@@ -82,7 +79,7 @@ Click `+` in the top bar or **Import media** in the preview. Lumen copies select
 
 For smooth loops, use a 16:9 or 16:10 clip at 1080p or 4K, around 10–30 seconds long, with matching first and last frames. Wallpaper audio is muted by design.
 
-Selecting a wallpaper updates macOS immediately, so locking the Mac before quitting uses the current selection. **Video Wallpaper** is enabled by default: imported videos use the native Desktop and Idle selection, with one reusable **Lumen** catalog entry. This preference stays enabled when you choose an image, so the next video animates on the lock screen again. Turn it off in Settings to use a still frame of the selected video as the system wallpaper. Procedural scenes use a still preview on the lock screen.
+**Video Wallpaper** uses the selected video on the signed-in lock screen on supported macOS versions. Turn it off in Settings to use a still preview. Procedural scenes and systems without native video support use still previews.
 
 The **Discover** tab can browse Wallhaven images and, when a Pexels API key is configured, Pexels videos. Downloading a card adds it to **My Library**, immediately applies it as the wallpaper, and leaves the card clickable for switching back to it later. Hover over a downloaded card to remove it from the library. The Home recommendations row is populated from shuffled API results when they are available.
 
@@ -94,19 +91,19 @@ Only import media you created yourself or have permission to use. Good sources f
 
 ## Release signing
 
-The repository includes [`scripts/build-release.sh`](scripts/build-release.sh), which builds a universal app and creates a DMG. With no signing variables it produces a local, ad-hoc build. For distribution outside your own Mac, use a paid Apple Developer account and set:
+[`scripts/build-release.sh`](scripts/build-release.sh) builds a universal app and DMG in `build/releases/<version>/` and removes its build caches after verification. Failed builds retain their diagnostics. With no signing variables it produces a local, ad-hoc build. For distribution, use a paid Apple Developer account and set:
 
 ```sh
 export DEVELOPER_ID_APPLICATION="Developer ID Application: Your Name (TEAMID)"
 export KEYCHAIN_PROFILE="lumen-notary"
-./scripts/build-release.sh 1.0.8.1
+./scripts/build-release.sh 0.1.9
 ```
 
 Create the `notarytool` keychain profile once with `xcrun notarytool store-credentials`. The script signs with hardened runtime, submits the DMG for notarization, and staples the ticket. A notarized, Developer ID-signed DMG is what gives users the normal “open” experience without an unidentified-developer warning.
 
 ## macOS limitation
 
-macOS owns the password and account UI used by `Control-Command-Q`; Lumen does not replace or modify it. The Video Wallpaper feature registers the video with the user-level Aerials catalog and applies it as the desktop and idle wallpaper, so macOS renders its normal lock interface over the moving video. This integration is available on macOS releases that provide the Aerials video wallpaper catalog.
+macOS controls the lock screen and login screen. Native video wallpaper depends on macOS's Aerials integration and applies to the signed-in lock screen; Lumen does not change the login screen shown before signing in.
 
 ## Privacy
 
